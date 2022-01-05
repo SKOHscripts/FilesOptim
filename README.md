@@ -20,6 +20,8 @@ Then copy the file in the desired directory, knowing that the work will be done 
 
 And that's it, afterwards everything is done by itself!
 
+With help from Maximilian Fries’s code (2016) maxfries@t-online.de
+
 ```bash
 #!/bin/bash
 
@@ -131,11 +133,6 @@ sleep 3
 ## Copyright (C) 2016 Maximilian Fries - All Rights Reserved
 ## Contact: maxfries@t-online.de
 ## Last revised 2016-07-29
-
-# Usage
-# ./pdf-compress.sh [screen|ebook|prepress|default] [verbose]
-
-# Variables and preparation
 
 which gs > /dev/null
 if [ $? = 1 ]
