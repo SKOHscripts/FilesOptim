@@ -17,6 +17,13 @@
  done
  echo -e " $neutre"
  sleep 3
+
+ which jpegoptim > /dev/null
+ if [ $? = 1 ]
+ then
+ 	sudo apt install -y jpegoptim
+ fi
+
  find . -type f \( -iname "*.jpg" -o -iname "*.jpeg" \) >> jpg_files.txt
  IFS=$'\n'       # make newlines the only separator
  set -f          # disable globbing
@@ -32,6 +39,11 @@
  fi
 rm ./jpg_files.txt
 
+which optipng > /dev/null
+if [ $? = 1 ]
+then
+ sudo apt install -y optipng
+fi
 
  find . -type f \( -iname "*.png" \) >> png_files.txt
  IFS=$'\n'       # make newlines the only separator
@@ -59,6 +71,12 @@ done
 echo -e " $neutre"
 sleep 3
 find . -type f -iname "*.mp4" -o -iname '*.mkv' -o -iname '*.avi' -o -iname '*.m4v' -o -iname '*.wmv'>> paths_file.txt
+
+which ffmpeg > /dev/null
+if [ $? = 1 ]
+then
+ sudo apt install -y ffmpeg
+fi
 
 IFS=$'\n'       # make newlines the only separator
 set -f          # disable globbing
@@ -95,6 +113,13 @@ sleep 3
 # ./pdf-compress.sh [screen|ebook|prepress|default] [verbose]
 
 # Variables and preparation
+
+which gs > /dev/null
+if [ $? = 1 ]
+then
+ sudo apt install -y gs
+fi
+
 {
 count=0
 success=0

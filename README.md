@@ -1,55 +1,26 @@
 # linux-maintenance
 
-[![support](
-https://brianmacdonald.github.io/Ethonate/svg/eth-support-blue.svg)](
-https://brianmacdonald.github.io/Ethonate/address#0xEDa4b087fac5faa86c43D0ab5EfCa7C525d475C2)
+[![support](https://brianmacdonald.github.io/Ethonate/svg/eth-support-blue.svg)](https://brianmacdonald.github.io/Ethonate/address#0xEDa4b087fac5faa86c43D0ab5EfCa7C525d475C2)
 
-<p>Un script shell qui permet de faire une maintenance complète du système Linux (sous Ubuntu).
-Les paquets utiles seront installés automatiquement s'ils ne le sont pas.</p>
+<p>Un script shell qui permet d’optimiser la place prise par de nombreux fichiers. Le script va optimiser la taille des fichiers JPG et PNG sans perte de qualité. Ensuite il fera une liste récursive des fichiers vidéo (.mp4, .mkv, .avi, .m4v, .wmv) et optimisera leur taille avant de les convertir en .mp4. Finalement, il optimisera la taille des fichiers PDF qui, seuls, ne sont pas très lourds, mais peuvent prendre beaucoup de place s’ils sont nombreux.</p>
 
-<p>La partie nettoyage de la corbeille permet de supprimer (ou non) les fichiers présents dans la corbeille depuis plus de 1 semaine. Mais vous pouvez changer cette valeur avec la macro correspondante. Explications ici : <a href="https://linuxhandbook.com/date-command/" title="commande date">https://linuxhandbook.com/date-command/</a>
+Pour lancer le script, ne pas oublier d'autoriser l'exécution : <br/>`chmod +x ./FilesOptim.sh`
 
-Pour lancer le script, ne pas oublier d'autoriser l'exécution : <br/>`chmod +x ./maintenance.sh`
+Puis copier le fichier dans le répertoire souhaité, sachant que le travail se fera récurssivement. Enfin, se placer dans le dossier et exécuter le script : <br/>`./FilesOptim.sh`
 
-Puis se placer dans le dossier et exécuter le script : <br/>`./maintenance.sh`
+Et voilà, après tout se fait tout seul !
 
-Et voilà, après tout se fait tout seul :
-<b><ol>
-    <li>Mise à jour</li>
-    <li>Autoremove/clean</li>
-    <li>"Localepurge" des fichiers inutiles en fonction de votre langue</li>
-    <li>Purge des paquets supprimés</li>
-    <li>Purge des kernels inutiles et mis en "manuels"</li>
-    <li>Mise à jour des snaps</li>
-    <li>Résolution des dépendances non présentes</li>
-    <li>Nettoyage de la corbeille</li>
-</ol>
-</b>
+* * *
 
----
+<p>A shell script that optimizes the size of many files. The script will optimise the size of JPG and PNG files without loss of quality. Then it will recursively list video files (.mp4, .mkv, .avi, .m4v, .wmv) and optimise their size before converting them to .mp4. Finally, it will optimise the size of the PDF files which, on their own, are not very heavy, but can take up a lot of space if there are many of them.</p>
 
-<p>A shell script that allows to do a complete maintenance of the Linux system (under Ubuntu). Useful packages will be installed automatically if they are not.</p>
+To launch the script, don't forget to authorise execution: <br/>`chmod +x ./FilesOptim.sh`
 
-<p>The "trash cleanup" part allows to remove (or not) files that have been in the trash for more than 1 week. But you can change this value with the corresponding macro. Explanations here: <a href="https://linuxhandbook.com/date-command/" title="commande date">https://linuxhandbook.com/date-command/</a>
+Then copy the file in the desired directory, knowing that the work will be done recursively. Finally, go to the folder and execute the script: <br/>`./FilesOptim.sh`.
 
-To launch the script, don't forget to allow the execution : <br/> chmod +x ./maintenance.sh
+And that's it, afterwards everything is done by itself!
 
-Then go into the folder and execute the script : <br/> ./maintenance.sh
-
-And voilà, everything is done by itself:
-<b><ol>
-    <li>Updating</li>
-    <li>Autoremove/clean</li>
-    <li>"Localepurge" junk files according to your language</li>
-    <li>Purging deleted packages</li>
-    <li>Purge useless kernels and put them in "manuals".</li>
-    <li>Snapshot update</li>
-    <li>Resolution of dependencies not present</li>
-    <li>Cleaning the basket</li>
-</ol>
-</b>
-
-``` bash
+```bash
 #!/bin/bash
 
 rouge='\e[1;31m'
@@ -59,119 +30,194 @@ violet='\e[1;35m'
 vert='\e[1;32m'
 neutre='\e[0;m'
 
-if [ "$UID" -eq "0" ]
-then
-    zenity --warning --height 80 --width 400 --title "EREUR" --text "Merci de lancez le script sans sudo : \n<b>./maintenance.sh</b>\nVous devrez entrer le mot de passe root par la suite."
-    exit
-fi
+####################################################################################
+# PICTURES OPTIMISATION
+####################################################################################
+echo ""
+echo -e -n "$vert [1/3]$rouge PICTURES OPTIMISATION "
+for i in `seq 30 $COLUMNS`;
+    do echo -n "."
+done
+echo -e " $neutre"
+sleep 3
 
-which notify-send > /dev/null
+which jpegoptim > /dev/null
 if [ $? = 1 ]
 then
-	sudo apt install -y libnotify-bin
+ sudo apt install -y jpegoptim
 fi
 
-which zenity > /dev/null
+find . -type f \( -iname "*.jpg" -o -iname "*.jpeg" \) >> jpg_files.txt
+IFS=$'\n'       # make newlines the only separator
+set -f          # disable globbing
+for i in $(cat < "./jpg_files.txt"); do
+  echo "$i"
+  jpegoptim -v -p -t "$i"
+done
+if [ ! -s "./jpg_files.txt" ]
+then
+  echo -e " $violet"
+  echo "No JPG File in Directory"
+  echo -e " $neutre"
+fi
+rm ./jpg_files.txt
+
+which optipng > /dev/null
 if [ $? = 1 ]
 then
-	sudo apt install -y zenity
+sudo apt install -y optipng
 fi
 
-zenity --question --no-wrap --height 40 --width 300 --title  "Maintenance d'Ubuntu" --text "Lancer la maintenance complète ?"
-
-if [ $? == 0 ]
+find . -type f \( -iname "*.png" \) >> png_files.txt
+IFS=$'\n'       # make newlines the only separator
+set -f          # disable globbing
+for i in $(cat < "./png_files.txt"); do
+  echo "$i"
+  optipng -keep -preserve -verbose "$i"
+done
+if [ ! -s "./png_files.txt" ]
 then
-    echo ""
-    echo -e -n "$vert [1/7]$rouge MISE A JOUR DES PAQUETS "
-    for i in `seq 32 $COLUMNS`;
-        do echo -n "."
-    done
-    echo -e " $neutre"
-    notify-send -i system-software-update "Maintenance d'Ubuntu" "Mises à jour"
-    sudo dpkg --configure -a
-    sudo apt update
-    sudo apt full-upgrade -y
-    echo " "
+  echo -e " $violet"
+  echo "No PNG File in Directory"
+  echo -e " $neutre"
+fi
+rm ./png_files.txt
 
-    echo -e -n "$vert [2/7]$rouge MISE A JOUR DES SNAPS "
-    for i in `seq 30 $COLUMNS`;
-        do echo -n "."
-    done
-    echo -e " $neutre"
-    # notify-send -i system-software-update "Maintenance d'Ubuntu" "Mise à jour des snaps"
-    snap list --all
-    sudo snap refresh
-    echo " "
+#####################################################################################
+# VIDEO OPTIMISATION
+#####################################################################################
+echo ""
+echo -e -n "$vert [2/3]$rouge VIDEO OPTIMISATION "
+for i in `seq 27 $COLUMNS`;
+   do echo -n "."
+done
+echo -e " $neutre"
+sleep 3
+find . -type f -iname "*.mp4" -o -iname '*.mkv' -o -iname '*.avi' -o -iname '*.m4v' -o -iname '*.wmv'>> paths_file.txt
 
-    echo -e -n "$vert [3/7]$rouge AUTO-REMOVE "
-        for i in `seq 20 $COLUMNS`;
-        do echo -n "."
-    done
-    echo -e " $neutre"
-    # notify-send -i system-software-update "Maintenance d'Ubuntu" "Auto-remove"
-    sudo apt autoremove --purge -y
-    echo " "
+which ffmpeg > /dev/null
+if [ $? = 1 ]
+then
+sudo apt install -y ffmpeg
+fi
 
-    echo -e -n "$vert [4/7]$rouge CLEAN "
-        for i in `seq 14 $COLUMNS`;
-        do echo -n "."
-    done
-    echo -e " $neutre"
-    # notify-send -i system-software-update "Maintenance d'Ubuntu" "Clean"
-    sudo apt autoclean
-    echo " "
+IFS=$'\n'       # make newlines the only separator
+set -f          # disable globbing
+for i in $(cat < "./paths_file.txt"); do
+ echo "$i"
+ ffmpeg -y -i "$i" -vcodec libx265 -crf 28 ${i%%c.*}.mp4 &&  mv ${i%%c.*}.mp4 "$i" || rm ${i%%c.*}.mp4
+done
 
-    echo -e -n "$vert [5/7]$rouge PURGE "
-        for i in `seq 14 $COLUMNS`;
-        do echo -n "."
-    done
-    echo -e " $neutre"
-    # notify-send -i system-software-update "Maintenance d'Ubuntu" "Purge"
+if [ ! -s "./paths_file.txt" ]
+then
+ echo -e " $violet"
+ echo "No VIDEO File in Directory"
+ echo -e " $neutre"
+fi
 
-    sudo apt purge $(COLUMNS=200 dpkg -l | grep "^rc" | tr -s ' ' | cut -d ' ' -f 2) -y
-    echo " "
-    echo -e -n "$vert [6/7]$rouge RESOLUTION DES DEPENDANCES "
-        for i in `seq 35 $COLUMNS`;
-        do echo -n "."
-    done
-    echo -e " $neutre"
-    # notify-send -i system-software-update "Maintenance d'Ubuntu" "Réparation des dépendances"
-    sudo apt install -fy
-    echo ""
-    TRASH=$(date --date="3 week ago" "+%d %B")
+rm ./paths_file.txt
 
-    echo -e -n "$vert [7/7]$rouge FICHIERS ANTERIEURS AU $TRASH "
-        for i in `seq 40 $COLUMNS`;
-        do echo -n "."
-    done
-    echo -e " $neutre"
-    # notify-send -i system-software-update "Maintenance d'Ubuntu" "Suppression des fichiers de la corbeille antérieurs au $TRASH"
-    echo " "
+#####################################################################################
+# PDF OPTIMISATION
+#####################################################################################
+echo ""
+echo -e -n "$vert [3/3]$rouge PDF OPTIMISATION "
+for i in `seq 25 $COLUMNS`;
+   do echo -n "."
+done
+echo -e " $neutre"
+sleep 3
+## Script to compress PDF Files using ghostscript incl. subdirs
+## Copyright (C) 2016 Maximilian Fries - All Rights Reserved
+## Contact: maxfries@t-online.de
+## Last revised 2016-07-29
 
-    which trash-cli > /dev/null
-    if [ $? = 1 ]
-    then
-        sudo apt install -y trash-cli
-    fi
+# Usage
+# ./pdf-compress.sh [screen|ebook|prepress|default] [verbose]
 
-    for i in `seq 0 21`;
-        do trash-list | grep $(date --date="$i day ago" "+%Y-%m-%d")
-    done
-    echo " "
-    echo " "
-    for i in `seq 21 60`;
-        do trash-list | grep $(date --date="$i day ago" "+%Y-%m-%d")
-    done
+# Variables and preparation
 
-    zenity --question --height 40 --width 300 --title "Maintenance d'Ubuntu" --text "Voulez-vous supprimer les fichiers de la corbeille antérieurs au <b>$TRASH</b> ?"
-    if [ $? == 0 ]
-	then
-	    trash-empty 21
-	fi
-    notify-send -i dialog-ok "Maintenance d'Ubuntu" "Terminée avec succès"
+which gs > /dev/null
+if [ $? = 1 ]
+then
+sudo apt install -y gs
+fi
+
+{
+count=0
+success=0
+successlog=./success.tmp
+gain=0
+gainlog=./gain.tmp
+pdfs=$(find ./ -type f -name "*.pdf")
+total=$(echo "$pdfs" | wc -l)
+log=./log
+verbose="-dQUIET"
+mode="prepress"
+echo "0" | tee $successlog $gainlog > /dev/null
+}
+
+# Are there any PDFs?
+if [ "$total" -gt 0 ]; then
+
+#Parameter Handling & Logging
+{
+ echo "-- Debugging for Log START --"
+ echo "Number of Parameters: $#"
+ echo "Parameters are: $*"
+ echo "-- Debugging for Log END   --"
+} >> $log
+
+# Only compression-mode set
+if [ $# -eq 1 ]; then
+ mode="$1"
+fi
+
+# Also Verbose Level Set
+if [ $# -eq 2 ]; then
+ mode="$1"
+ verbose=""
+fi
+
+echo "$pdfs" | while read -r file
+do
+ ((count++))
+ echo "Processing File #$count of $total Files" | tee -a $log
+ echo "Current File: $file "| tee -a $log
+ gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS="/$mode" -dNOPAUSE \
+ -dBATCH $verbose -sOutputFile="$file-new" "$file" | tee -a $log
+
+ sizeold=$(wc -c "$file" | cut -d' ' -f1)
+ sizenew=$(wc -c "$file-new" | cut -d' ' -f1)
+ difference=$((sizenew-sizeold))
+
+ # Check if new filesize is smaller
+ if [ $difference -lt 0 ]
+ then
+   rm "$file"
+   mv "$file-new" "$file"
+   printf "Compression was successfull. New File is %'.f Bytes smaller\n" \
+   $((-difference)) | tee -a $log
+   ((success++))
+   echo $success > $successlog
+   ((gain-=difference))
+   echo $gain > $gainlog
+ else
+   rm "$file-new"
+   echo "Compression was not necessary" | tee -a $log
+ fi
+
+done
+
+# Print Statistics
+printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $total | tee -a $log
+printf "Safed a total of %'.f Bytes\n" $(cat $gainlog) | tee -a $log
+
+rm $successlog $gainlog $log
 
 else
-    notify-send -i dialog-close "Maintenance d'Ubuntu" "Annulé"
-    exit
+ echo -e " $violet"
+ echo "No PDF File in Directory"
+ echo -e " $neutre"
 fi
 ```
