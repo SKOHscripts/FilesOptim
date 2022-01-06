@@ -126,10 +126,7 @@ then
   ## Script to compress PDF Files using ghostscript incl. subdirs
   ## Copyright (C) 2016 Maximilian Fries - All Rights Reserved
   ## Contact: maxfries@t-online.de
-  ## Last revised 2016-07-29
-
-  # Usage
-  # ./pdf-compress.sh [screen|ebook|prepress|default] [verbose]
+  ## Last revised 2022-01-05 by Corentin Michel (https://github.com/SKOHscripts)
 
   # Variables and preparation
 
