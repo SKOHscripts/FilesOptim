@@ -1,4 +1,10 @@
  #!/bin/bash
+ #########################################################################
+ ## A shell script made to optimize JPG, PNG, videos bnd PDF files’ sizes.
+ ## Copyright (C) Corentin Michel - All Rights Reserved
+ ## Contact: corentin.michel@mailo.com [https://github.com/SKOHscripts]
+ ## With help from Maximilian Fries’s code (2016) @MokaMokiMoke[https://github.com/MokaMokiMoke]
+ #########################################################################
 
  rouge='\e[1;31m'
  vert='\e[1;33m'
@@ -178,17 +184,17 @@ then
     echo "Processing File #$count of $total Files" | tee -a $log
     echo "Current File: $file "| tee -a $log
     gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS="/$mode" -dNOPAUSE \
-    -dBATCH $verbose -sOutputFile="$file_new" "$file" | tee -a $log
+    -dBATCH $verbose -sOutputFile="$file-new" "$file" | tee -a $log
 
     sizeold=$(wc -c "$file" | cut -d' ' -f1)
-    sizenew=$(wc -c "$file_new" | cut -d' ' -f1)
+    sizenew=$(wc -c "$file-new" | cut -d' ' -f1)
     difference=$((sizenew-sizeold))
 
     # Check if new filesize is smaller
     if [ $difference -lt 0 ]
     then
       rm "$file"
-      mv "$file_new" "$file"
+      mv "$file-new" "$file"
       printf "Compression was successfull. New File is %'.f Bytes smaller\n" \
       $((-difference)) | tee -a $log
       ((success++))
@@ -196,7 +202,7 @@ then
       ((gain-=difference))
       echo $gain > $gainlog
     else
-      rm "$file_new"
+      rm "$file-new"
       echo "Compression was not necessary" | tee -a $log
     fi
 

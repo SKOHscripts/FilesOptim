@@ -20,7 +20,7 @@ Then copy the file in the desired directory, knowing that the work will be done 
 
 And that's it, afterwards everything is done by itself!
 
-With help from Maximilian Fries’s code (2016) maxfries@t-online.de
+With help from Maximilian Fries’s code (2016) @MokaMokiMoke[https://github.com/MokaMokiMoke]
 
 ```bash
 #!/bin/bash
@@ -150,8 +150,7 @@ then
  sleep 3
  ## Script to compress PDF Files using ghostscript incl. subdirs
  ## Copyright (C) 2016 Maximilian Fries - All Rights Reserved
- ## Contact: maxfries@t-online.de
- ## Last revised 2022-01-05 by Corentin Michel (https://github.com/SKOHscripts)
+ ## Contact: maxfries@t-online.de [https://github.com/MokaMokiMoke]
 
  # Variables and preparation
  which gs > /dev/null
