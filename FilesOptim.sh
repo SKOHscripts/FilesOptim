@@ -54,7 +54,6 @@ then
  count=0
  success=0
  successlog=./success.tmp
- echo "" | tee ./jpg_files.txt > /dev/null
  find . -type f \( -iname "*.jpg" -o -iname "*.jpeg" \) >> jpg_files.txt
  total=$(wc -l < "jpg_files.txt")
  log=./log
@@ -112,7 +111,6 @@ then
  count=0
  success=0
  successlog=./success.tmp
- echo "" | tee ./png_files.txt > /dev/null
  find . -type f \( -iname "*.png" \) >> png_files.txt
  total=$(wc -l < "png_files.txt")
  # log=./log
@@ -183,7 +181,6 @@ then
  successlog=./success.tmp
  gain=0
  gainlog=./gain.tmp
- echo "" | tee ./paths_file.txt > /dev/null
  find . -type f -iname "*.mp4" -o -iname '*.mkv' -o -iname '*.avi' -o -iname '*.m4v' -o -iname '*.wmv'>> paths_file.txt
  total=$(wc -l < "paths_file.txt")
  log=./log
@@ -196,46 +193,48 @@ then
 
  if [ ! -s "paths_file.txt" ]
  then
-   echo -e " $violet"
-   echo "No VIDEO File in Directory"
-   echo -e " $neutre"
+    echo -e " $violet"
+    echo "No VIDEO File in Directory"
+    echo -e " $neutre"
+
  else
-   for i in $(cat < "./paths_file.txt"); do
-     ((count++))
-     echo "Processing File #$count of $total Files"
-     echo "Current File: $i "
-     extension="${i##*.}"
-     new="$i.$extension"
-     ffmpeg -y -i "$i" -vcodec libx265 -crf 28 "$new" || rm "$new"
+    for i in $(cat < "./paths_file.txt"); do
+      ((count++))
+      echo "Processing File #$count of $total Files"
+      echo "Current File: $i "
+      extension="${i##*.}"
+      new="$i.$extension"
+      ffmpeg -y -i "$i" -vcodec libx265 -crf 28 "$new" || rm "$new"
 
-     sizeold=$(wc -c "$i" | cut -d' ' -f1)
-     sizenew=$(wc -c "$i.$extension" | cut -d' ' -f1)
-     difference=$((sizenew-sizeold))
-     perc=$((-difference*100/sizeold))
+      sizeold=$(wc -c "$i" | cut -d' ' -f1)
+      sizenew=$(wc -c "$i.$extension" | cut -d' ' -f1)
+      difference=$((sizenew-sizeold))
+      perc=$((-difference*100/sizeold))
 
-     echo ""
+      echo ""
 
-     # Check if new filesize is smaller
-     if [ $perc -ge $limit ]
-     then
-       mv "$new" "$i"
-       printf "Compression was successfull. New File is %'.f Bytes smaller\n" \
-       $((-difference)) | tee -a $log
-       ((success++))
-       echo $success > $successlog
-       ((gain-=difference))
-       echo $gain > $gainlog
-     else
-       rm "$new"
-       echo "Compression was not necessary" | tee -a $log
-     fi
-   done
-   # Print Statistics
-   printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $total | tee -a $log
-   printf "Safed a total of %'.f Bytes\n" $(cat $gainlog) | tee -a $log
-
-   rm $successlog $log
+      # Check if new filesize is smaller
+      if [ $perc -ge $limit ]
+      then
+        mv "$new" "$i"
+        printf "Compression was successfull. New File is %'.f Bytes smaller\n" \
+        $((-difference)) | tee -a $log
+        ((success++))
+        echo $success > $successlog
+        ((gain-=difference))
+        echo $gain > $gainlog
+      else
+        rm "$new"
+        echo "Compression was not necessary" | tee -a $log
+      fi
+    done
+    # Print Statistics
+    printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $total | tee -a $log
+    printf "Safed a total of %'.f Bytes\n" $(cat $gainlog) | tee -a $log
+    
+    rm $successlog $log
  fi
+
  rm ./paths_file.txt
 
 
@@ -268,7 +267,6 @@ then
  successlog=./success.tmp
  gain=0
  gainlog=./gain.tmp
- echo "" | tee ./pdf_files.txt > /dev/null
  find . -type f -name "*.pdf" >> pdf_files.txt
  total=$(wc -l < "pdf_files.txt")
  log=./log
@@ -336,6 +334,7 @@ then
        # Print Statistics
        printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $total | tee -a $log
        printf "Safed a total of %'.f Bytes\n" $(cat $gainlog) | tee -a $log
+       zenity --info --width=300 --height=100 --text "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $total | tee -a $log
    done
  fi
  rm $successlog $gainlog $log ./pdf_files.txt
