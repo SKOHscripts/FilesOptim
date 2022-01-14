@@ -51,7 +51,7 @@ then
  sudo apt install -y zenity
 fi
 
-zenity --question --width=500 --height=100 --title  "FilesOptim" --text "This script will recursively optimise the size of .JPG and .PNG files without loss of quality, some video files before converting them to .MP4 and finally .PDF files without loss of colour quality and fixing the images at 300DPI.\n\nAre you OK with that ?"
+zenity --question --width=500 --height=100 --title  "FilesOptim" --text "A shell script that optimizes the size of many files. The script will optimise the size of .JPG and .PNG files without loss of quality. Next, it will recursively list video files (.mp4, .mkv, .avi, .m4v, .wmv) and optimise their size if the gain is greater than a chosen value (75% by default). Finally, it will optimise .PDF files without loss of colour quality and fixing the images at 300DPI.\n\nAre you OK with that ?"
 if [ $? == 0 ]
 then
  zenity --info --width=300 --height=100 --text "Please select the folder from where you want to start optimization."
