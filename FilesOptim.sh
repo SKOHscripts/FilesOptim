@@ -31,7 +31,7 @@ if [ $? == 0 ]
 then
   zenity --info --width=300 --height=100 --text "Please select the folder from where you want to start optimization."
   inputStr=$(zenity --file-selection --directory "${HOME}")
-  cd $inputStr
+  cd $inputStr || zenity --error --width=300 --height=100 --text "The folder name has to have no spacces." && exit
    ####################################################################################
    # PICTURES OPTIMISATION
    ####################################################################################
