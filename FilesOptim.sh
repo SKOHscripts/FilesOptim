@@ -54,6 +54,7 @@ then
  count=0
  success=0
  successlog=./success.tmp
+ echo "" | tee ./jpg_files.txt > /dev/null
  find . -type f \( -iname "*.jpg" -o -iname "*.jpeg" \) >> jpg_files.txt
  total=$(wc -l < "jpg_files.txt")
  log=./log
@@ -111,6 +112,7 @@ then
  count=0
  success=0
  successlog=./success.tmp
+ echo "" | tee ./png_files.txt > /dev/null
  find . -type f \( -iname "*.png" \) >> png_files.txt
  total=$(wc -l < "png_files.txt")
  # log=./log
@@ -133,7 +135,7 @@ then
      echo "Processing File #$count of $total Files"
      echo "Current File: $i "
      sizeold=$(wc -c "$i" | cut -d' ' -f1)
-     optipng -o5 -preserve -verbose "$i"
+     optipng -o5 -preserve "$i"
      sizenew=$(wc -c "$i" | cut -d' ' -f1)
      difference=$((sizenew-sizeold))
      # Check if new filesize is smaller
@@ -181,6 +183,7 @@ then
  successlog=./success.tmp
  gain=0
  gainlog=./gain.tmp
+ echo "" | tee ./paths_file.txt > /dev/null
  find . -type f -iname "*.mp4" -o -iname '*.mkv' -o -iname '*.avi' -o -iname '*.m4v' -o -iname '*.wmv'>> paths_file.txt
  total=$(wc -l < "paths_file.txt")
  log=./log
@@ -265,6 +268,7 @@ then
  successlog=./success.tmp
  gain=0
  gainlog=./gain.tmp
+ echo "" | tee ./pdf_files.txt > /dev/null
  find . -type f -name "*.pdf" >> pdf_files.txt
  total=$(wc -l < "pdf_files.txt")
  log=./log
