@@ -7,7 +7,7 @@
 #########################################################################
 clear
 rouge='\e[1;31m'
-vert='\e[1;33m'
+jaune='\e[1;33m'
 bleu='\e[1;34m'
 violet='\e[1;35m'
 vert='\e[1;32m'
@@ -31,7 +31,8 @@ if [ $? == 0 ]
 then
  zenity --info --width=300 --height=100 --text "Please select the folder from where you want to start optimization."
  inputStr=$(zenity --file-selection --directory "${HOME}")
- cd $inputStr || zenity --error --width=300 --height=100 --text "The folder name has to have no spacces." || exit
+ cd $inputStr || { zenity --error --width=300 --height=100 --text "The folder name must not contain spaces."; exit; }
+
 
  ####################################################################################
  # PICTURES OPTIMISATION
@@ -56,10 +57,13 @@ then
  successlog=./success.tmp
  find . -type f \( -iname "*.jpg" -o -iname "*.jpeg" \) >> jpg_files.txt
  total=$(wc -l < "jpg_files.txt")
+ TOTAL=$(($total + 0))
  log=./log
  gainlog=./gain.tmp
+ gain=0
  echo "0" | tee $successlog $gainlog > /dev/null
  }
+
 
  IFS=$'\n'       # make newlines the only separator
  set -f          # disable globbing
@@ -73,8 +77,9 @@ then
  else
    for i in $(cat < "./jpg_files.txt"); do
      ((count++))
-     echo "Processing File #$count of $total Files"
-     echo "Current File: $i "
+     echo -e " $jaune"
+     echo "Processing JPG #$count of $total"
+     echo -e -n " $neutre"
      sizeold=$(wc -c "$i" | cut -d' ' -f1)
      jpegoptim -p -t "$i"
      sizenew=$(wc -c "$i" | cut -d' ' -f1)
@@ -89,12 +94,14 @@ then
        ((gain-=difference))
        echo $gain > $gainlog
      else
-       echo "Compression was not necessary" | tee -a $log
+       printf "Compression was not necessary\n" | tee -a $log
      fi
    done
    # Print Statistics
    printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $total | tee -a $log
    printf "Safed a total of %'.f Bytes\n" $(cat $gainlog) | tee -a $log
+   zenity --notification --width=300 --height=100 --text "Successfully compressed $(cat $successlog) of $total files\nSafed a total of $(cat gain.tmp) Bytes"
+
  fi
  rm ./jpg_files.txt
 
@@ -109,13 +116,9 @@ then
 
  {
  count=0
- success=0
- successlog=./success.tmp
  find . -type f \( -iname "*.png" \) >> png_files.txt
  total=$(wc -l < "png_files.txt")
- # log=./log
- # gainlog=./gain.tmp
- echo "0" | tee $successlog > /dev/null
+ TOTAL=$(($TOTAL + $total))
  }
 
  IFS=$'\n'       # make newlines the only separator
@@ -130,8 +133,9 @@ then
  else
    for i in $(cat < "./png_files.txt"); do
      ((count++))
-     echo "Processing File #$count of $total Files"
-     echo "Current File: $i "
+     echo -e " $jaune"
+     echo "Processing PNG #$count of $total"
+     echo -e -n " $neutre"
      sizeold=$(wc -c "$i" | cut -d' ' -f1)
      optipng -o5 -preserve "$i"
      sizenew=$(wc -c "$i" | cut -d' ' -f1)
@@ -146,12 +150,14 @@ then
        ((gain-=difference))
        echo $gain > $gainlog
      else
-       echo "Compression was not necessary" | tee -a $log
+       printf "Compression was not necessary\n" | tee -a $log
      fi
    done
    # Print Statistics
    printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $total | tee -a $log
    printf "Safed a total of %'.f Bytes\n" $(cat $gainlog) | tee -a $log
+   zenity --notification --width=300 --height=100 --text "Successfully compressed $(cat $successlog) of $total files\nSafed a total of $(cat gain.tmp) Bytes"
+
 
    rm $successlog $log
  fi
@@ -177,14 +183,13 @@ then
 
  {
  count=0
- success=0
  successlog=./success.tmp
- gain=0
  gainlog=./gain.tmp
  find . -type f -iname "*.mp4" -o -iname '*.mkv' -o -iname '*.avi' -o -iname '*.m4v' -o -iname '*.wmv'>> paths_file.txt
  total=$(wc -l < "paths_file.txt")
+ TOTAL=$(($TOTAL + $total))
  log=./log
- echo "0" | tee $successlog > /dev/null
+ # echo "0" | tee $successlog > /dev/null
  limit=75 #If video is compressed for less than 75%, the compression will be cancelled
  }
 
@@ -200,8 +205,10 @@ then
  else
     for i in $(cat < "./paths_file.txt"); do
       ((count++))
-      echo "Processing File #$count of $total Files"
+      echo -e " $jaune"
+      echo "Processing vidéo file #$count of $total"
       echo "Current File: $i "
+      echo -e -n " $neutre"
       extension="${i##*.}"
       new="$i.$extension"
       ffmpeg -y -i "$i" -vcodec libx265 -crf 28 "$new" || rm "$new"
@@ -225,12 +232,13 @@ then
         echo $gain > $gainlog
       else
         rm "$new"
-        echo "Compression was not necessary" | tee -a $log
+        printf "Compression was not necessary\n" | tee -a $log
       fi
     done
     # Print Statistics
     printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $total | tee -a $log
     printf "Safed a total of %'.f Bytes\n" $(cat $gainlog) | tee -a $log
+    zenity --notification --width=300 --height=100 --text "Successfully compressed $(cat $successlog) of $total files\nSafed a total of $(cat gain.tmp) Bytes"
 
     rm $successlog $log
  fi
@@ -263,16 +271,15 @@ then
 
  {
  count=0
- success=0
  successlog=./success.tmp
- gain=0
  gainlog=./gain.tmp
  find . -type f -name "*.pdf" >> pdf_files.txt
  total=$(wc -l < "pdf_files.txt")
+ TOTAL=$(($TOTAL + $total))
  log=./log
  verbose="-dQUIET"
  mode="printer"
- echo "0" | tee $successlog > /dev/null
+ # echo "0" | tee $successlog > /dev/null
  }
 
  #Parameter Handling & Logging
@@ -308,8 +315,10 @@ then
  else
    for i in $(cat < "pdf_files.txt"); do
      ((count++))
-     echo "Processing File #$count of $total Files" | tee -a $log
+     echo -e " $jaune"
+     echo "Processing PDF #$count of $total" | tee -a $log
      echo "Current File: $i "| tee -a $log
+     echo -e -n " $neutre"
      gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS="/$mode" -dNOPAUSE \ -dBATCH $verbose -sOutputFile="$i-new" "$i" | tee -a $log
 
      sizeold=$(wc -c "$i" | cut -d' ' -f1)
@@ -329,13 +338,13 @@ then
          echo $gain > $gainlog
        else
          rm "$i-new"
-         echo "Compression was not necessary" | tee -a $log
+         printf "Compression was not necessary\n" | tee -a $log
        fi
        # Print Statistics
        printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $total | tee -a $log
        printf "Safed a total of %'.f Bytes\n" $(cat $gainlog) | tee -a $log
-       zenity --info --width=300 --height=100 --text "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $total | tee -a $log
    done
+   zenity --info --width=300 --height=100 --text "Successfully compressed $(cat $successlog) of $TOTAL files\nSafed a total of $(cat gain.tmp) Bytes"
  fi
  rm $successlog $gainlog $log ./pdf_files.txt
 
