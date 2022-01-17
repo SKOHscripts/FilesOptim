@@ -96,11 +96,11 @@ then
      else
        printf "Compression was not necessary\n" | tee -a $log
      fi
+     # Print Statistics
+     printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $TOTAL | tee -a $log
+     printf "Safed a total of %'.f Bytes\n" $(cat $gainlog) | tee -a $log
    done
-   # Print Statistics
-   printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $total | tee -a $log
-   printf "Safed a total of %'.f Bytes\n" $(cat $gainlog) | tee -a $log
-   zenity --notification --width=300 --height=100 --text "Successfully compressed $(cat $successlog) of $total files\nSafed a total of $(cat gain.tmp) Bytes"
+   zenity --notification --width=300 --height=100 --text "Successfully compressed $(cat $successlog) of $TOTAL files\nSafed a total of $(cat gain.tmp) Bytes"
 
  fi
  rm ./jpg_files.txt
@@ -152,14 +152,11 @@ then
      else
        printf "Compression was not necessary\n" | tee -a $log
      fi
+     # Print Statistics
+     printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $TOTAL | tee -a $log
+     printf "Safed a total of %'.f Bytes\n" $(cat $gainlog) | tee -a $log
    done
-   # Print Statistics
-   printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $total | tee -a $log
-   printf "Safed a total of %'.f Bytes\n" $(cat $gainlog) | tee -a $log
-   zenity --notification --width=300 --height=100 --text "Successfully compressed $(cat $successlog) of $total files\nSafed a total of $(cat gain.tmp) Bytes"
-
-
-   rm $successlog $log
+   zenity --notification --width=300 --height=100 --text "Successfully compressed $(cat $successlog) of $TOTAL files\nSafed a total of $(cat gain.tmp) Bytes"
  fi
  rm ./png_files.txt
 
@@ -234,13 +231,11 @@ then
         rm "$new"
         printf "Compression was not necessary\n" | tee -a $log
       fi
+      # Print Statistics
+      printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $TOTAL | tee -a $log
+      printf "Safed a total of %'.f Bytes\n" $(cat $gainlog) | tee -a $log
     done
-    # Print Statistics
-    printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $total | tee -a $log
-    printf "Safed a total of %'.f Bytes\n" $(cat $gainlog) | tee -a $log
-    zenity --notification --width=300 --height=100 --text "Successfully compressed $(cat $successlog) of $total files\nSafed a total of $(cat gain.tmp) Bytes"
-
-    rm $successlog $log
+    zenity --notification --width=300 --height=100 --text "Successfully compressed $(cat $successlog) of $TOTAL files\nSafed a total of $(cat gain.tmp) Bytes"
  fi
 
  rm ./paths_file.txt
@@ -341,7 +336,7 @@ then
          printf "Compression was not necessary\n" | tee -a $log
        fi
        # Print Statistics
-       printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $total | tee -a $log
+       printf "Successfully compressed %'.f of %'.f files\n" $(cat $successlog) $TOTAL | tee -a $log
        printf "Safed a total of %'.f Bytes\n" $(cat $gainlog) | tee -a $log
    done
    zenity --info --width=300 --height=100 --text "Successfully compressed $(cat $successlog) of $TOTAL files\nSafed a total of $(cat gain.tmp) Bytes"
