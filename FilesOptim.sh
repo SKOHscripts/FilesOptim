@@ -13,7 +13,6 @@ violet='\e[1;35m'
 vert='\e[1;32m'
 neutre='\e[0;m'
 
-
 if [ "$UID" -eq "0" ]
 then
  zenity --warning --height 80 --width 400 --title "EREUR" --text "Merci de lancez le script sans sudo : \n<b>./FilesOptim.sh</b>."
