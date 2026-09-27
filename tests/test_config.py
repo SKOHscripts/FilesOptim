@@ -131,3 +131,16 @@ def test_tomllib_is_used() -> None:
 def test_negative_disk_settings(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="min_free_mb"):
         load_config(write(tmp_path, "[optimize]\nmin_free_mb = -1\n"))
+
+
+def test_help_language_detection() -> None:
+    from filesoptim.helptext import EN, FR, HelpText, language
+
+    assert language({}) == "en"
+    assert language({"LANG": "fr_FR.UTF-8"}) == "fr"
+    assert language({"LANG": "fr_FR.UTF-8", "LC_ALL": "C"}) == "fr"  # C/POSIX are skipped
+    assert language({"LANG": "fr_FR.UTF-8", "LC_MESSAGES": "de_DE"}) == "en"
+    assert language({"LANG": "en_US", "FILESOPTIM_LANG": "fr"}) == "fr"
+    assert set(EN) == set(FR)  # every text exists in both languages
+    assert HelpText("fr")("sort.summary") == FR["sort.summary"]
+    assert HelpText("xx").lang in ("en", "fr")

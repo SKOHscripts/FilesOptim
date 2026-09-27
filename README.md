@@ -9,6 +9,7 @@
 |---|---|
 | `filesoptim optimize` | Compresse les JPEG, PNG, GIF et PDF **sans perte** (résultat vérifié pixel par pixel ou page par page), et réencode les vidéos en HEVC/AV1 **seulement si c'est utile et visuellement sans perte** (qualité mesurée par SSIM ou VMAF). |
 | `filesoptim sort` | Trie un dossier dans une arborescence complète (`Photos/2019/06`, `Music/Artiste/Album`…), renomme par date, complète les dates manquantes et ajoute des mots-clés XMP. **Prévisualisation obligatoire, et annulation possible.** |
+| `filesoptim tag` | Ajoute des mots-clés XMP et complète les dates **sans jamais déplacer ni renommer** : pour une photothèque déjà rangée. Prévisualisation et annulation comme pour le tri. |
 | `filesoptim undo` | Annule un tri : fichiers, dossiers, dates et mots-clés reviennent à l'identique. |
 | `filesoptim clean` | Vide caches, miniatures, vieille corbeille, journaux archivés et paquets téléchargés, en affichant d'abord la taille exacte libérée. |
 | `filesoptim dupes` | Trouve les doublons (taille, puis empreinte, puis comparaison octet par octet) et les met à la corbeille, les supprime ou les remplace par des liens. |
@@ -90,6 +91,11 @@ filesoptim sort ~/Téléchargements/Photos --dest ~/Images --rename --fix-dates 
 filesoptim sort ~/Téléchargements/Photos --dest ~/Images --rename --fix-dates --tag
 filesoptim undo            # annule le dernier tri (filesoptim undo --list pour l'historique)
 
+# Mots-clés et dates sur place, sans rien déplacer
+filesoptim tag ~/Photos -n                           # aperçu des mots-clés ajoutés
+filesoptim tag ~/Photos/2019 --tags famille,plage   # + vos mots-clés
+filesoptim tag ~/Photos --no-keywords --fix-dates   # dates seulement
+
 # Maintenance
 filesoptim clean -n                     # taille exacte récupérable, sans rien supprimer
 filesoptim clean --only pip,npm,browsers
@@ -101,7 +107,8 @@ filesoptim brokenlinks ~ --delete
 filesoptim report ~ --estimate --dupes          # ou --json
 ```
 
-Chaque commande a son aide : `filesoptim <commande> --help`.
+Chaque commande a une aide détaillée, avec de nombreux exemples : `filesoptim --help`, puis `filesoptim <commande> --help`.
+L'aide est en français ou en anglais selon la langue du système (`LANG`, `LC_ALL`, `LC_MESSAGES`) ; `FILESOPTIM_LANG=en` ou `FILESOPTIM_LANG=fr` force une langue.
 
 ### Tri : modèles et métadonnées
 
@@ -160,6 +167,24 @@ filesoptim sort ~/Photos \
 - Avec `--no-mtime`, les photos sans aucune date fiable vont dans `Undated/`, à vérifier à la main.
 - Relancer la commande ne déplace plus rien : ce qui a été rangé correspond ensuite au motif.
 
+### Ajouter des mots-clés sans rien déplacer
+
+`filesoptim tag` écrit les mêmes métadonnées que `sort --tag`, mais laisse chaque fichier à sa place et sous son nom. C'est la commande à utiliser une fois la photothèque rangée :
+
+```bash
+filesoptim tag ~/Photos -n                                 # aperçu : fichier, date trouvée, changements
+filesoptim tag ~/Photos                                    # catégorie, appareil, dossier d'événement
+filesoptim tag ~/Photos/2019/Mariage --tags mariage,famille
+filesoptim tag ~/Photos --tags archive --only-my-tags      # uniquement vos mots-clés
+filesoptim tag ~/Photos --fix-dates --set-mtime            # + dates manquantes et date de modification
+filesoptim tag ~/Photos --no-keywords --fix-dates          # dates seulement
+filesoptim undo                                            # retire tout, à l'octet près
+```
+
+- Seuls les photos et vidéos sont traités (`--only image` ou `--only video` pour restreindre) ; exiftool est requis.
+- Un mot-clé déjà présent n'est pas ajouté une seconde fois, et un fichier qui n'a rien à changer n'est pas réécrit.
+- L'écriture passe par un fichier temporaire, remplacé atomiquement : un Ctrl+C ou un arrêt brutal ne laisse jamais de fichier à moitié écrit.
+
 ### Configuration
 
 ```bash
@@ -198,6 +223,7 @@ ruff check src tests && mypy               # lint + typage strict
 | Command | What it does |
 |---|---|
 | `optimize` | Lossless JPEG/PNG/GIF/PDF optimisation, **verified pixel by pixel or page by page**. Visually-lossless HEVC/AV1 video re-encoding, **only when worth it**. |
+| `tag` | XMP keywords and missing dates, written in place: nothing is moved or renamed. Preview and undo as for `sort`. |
 | `sort` / `undo` | Sorting into `Photos/{year}/{month}`-style trees, renaming, filling in missing dates, XMP keywords. Mandatory preview; everything can be undone. |
 | `clean` | Caches, thumbnails, old trash, archived journal files, package caches. |
 | `dupes` | Duplicates, checked byte by byte before acting. |
@@ -218,6 +244,8 @@ Then it asks for confirmation.
 - Originals are replaced atomically, with their metadata preserved; lossy re-encodes keep the original in the trash.
 
 **Installation**: `pipx install git+https://github.com/SKOHscripts/FilesOptim`, then `filesoptim doctor`.
+
+**Help**: `filesoptim --help` and `filesoptim <command> --help` explain every option with many examples. The help follows the system language (French or English); set `FILESOPTIM_LANG=en` or `fr` to force one.
 
 ---
 

@@ -42,7 +42,7 @@ def photo_with_junk(path: Path) -> Path:
 # -- generic behaviour --------------------------------------------------------------------
 def test_help_and_version(capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main([]) == 2
-    assert "examples:" in capsys.readouterr().out
+    assert "typical workflow" in capsys.readouterr().out
     with pytest.raises(SystemExit) as exc:
         cli.main(["--version"])
     assert exc.value.code == 0
@@ -372,3 +372,55 @@ def test_sort_templates_and_leave_sorted(tmp_path: Path) -> None:
     for bad in ("image", "cars={year}"):
         code, out = run(["sort", str(src), "--template", bad])
         assert code == 2 and "--template expects CATEGORY=TEMPLATE" in out.text
+
+
+@pytest.mark.parametrize("lang", ["en", "fr"])
+def test_every_command_has_a_detailed_help(lang: str, capsys: pytest.CaptureFixture[str],
+                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FILESOPTIM_LANG", lang)
+    commands = ["optimize", "sort", "tag", "undo", "clean", "dupes", "bigfiles", "emptydirs",
+                "brokenlinks", "report", "doctor", "config"]
+    for command in commands:
+        with pytest.raises(SystemExit):
+            cli.main([command, "--help"])
+        text = capsys.readouterr().out
+        assert f"filesoptim {command}" in text
+        assert ("exemple" if lang == "fr" else "example") in text
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    text = capsys.readouterr().out
+    assert all(command in text for command in commands)
+    assert ("utilisation :" if lang == "fr" else "usage:") in text
+
+
+def test_tag_command(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    src = tmp_path / "Photos"
+    event = src / "2019" / "Vacances Bretagne"
+    event.mkdir(parents=True)
+    photo = make_image(event / "IMG_20190712_101010.jpg", fmt="JPEG")
+    before = photo.read_bytes()
+    tools = FakeTools(["exiftool"])
+    code, out = run(["tag", str(src), "--tags", "famille", "--fix-dates", "-n"], tools=tools)
+    assert code == 0 and "Metadata plan" in out.text and "+tags" in out.text
+    assert "Vacances Bretagne" in out.text and "famille" in out.text
+    assert photo.read_bytes() == before  # preview only
+    code, out = run(["tag", str(src), "--tags", "famille", "--fix-dates", "--set-mtime", "-y"],
+                    tools=tools)
+    assert code == 0 and photo.exists()  # nothing moved nor renamed
+    assert [p.name for p in event.iterdir()] == ["IMG_20190712_101010.jpg"]
+    assert any("-XMP-dc:Subject+=famille" in call for call in tools.calls)
+    code, out = run(["tag", str(src), "--only-my-tags", "--tags", "x", "--no-keywords",
+                     "--set-mtime", "-y"], tools=tools)
+    assert code == 0
+    assert run(["undo", "-y"], tools=tools)[0] == 0
+
+
+def test_tag_errors(tmp_path: Path) -> None:
+    (tmp_path / "f.txt").write_text("x")
+    assert run(["tag", str(tmp_path / "f.txt")], tools=FakeTools(["exiftool"]))[0] == 2
+    code, out = run(["tag", str(tmp_path), "--only", "audio"], tools=FakeTools(["exiftool"]))
+    assert code == 2 and "image and video only" in out.text
+    code, out = run(["tag", str(tmp_path)], tools=FakeTools(["apt-get"]))
+    assert code == 2 and "sudo apt install libimage-exiftool-perl" in out.text
+    code, out = run(["tag", str(tmp_path), "--no-keywords"], tools=FakeTools(["exiftool"]))
+    assert code == 2 and "nothing to do" in out.text

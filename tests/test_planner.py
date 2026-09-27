@@ -371,3 +371,20 @@ def test_leave_sorted_and_library_duplicates(tmp_path: Path, config: Config) -> 
     assert dests(plan, src) == {"Import/same size.jpg": "2019/2019-06/same size.jpg",
                                 "loose.jpg": "2019/2019-06/loose.jpg"}
     assert kept.exists()
+
+
+def test_in_place_mode_never_moves(tmp_path: Path, config: Config) -> None:
+    src = tmp_path / "src"
+    touch(src / "loose" / "IMG_20190612_101530.jpg")
+    touch(src / "clip.avi")
+    infos = {"IMG_20190612_101530.jpg": {"date_source": "filename"}}
+    plan = planner(config, **infos).plan(SortOptions(src, src, fix_dates=True, tag=True,
+                                                     in_place=True))
+    assert [(op.action, op.destination == op.source) for op in plan.ops] == [("keep", True)]
+    assert plan.skipped == [(src / "clip.avi", "nothing to change")]
+    shown = Out()
+    preview(plan, shown)
+    assert "Metadata plan" in shown.text and "1 file(s) to update" in shown.text
+    cut = Out()
+    preview(plan, cut, limit=0)
+    assert "… and 1 more (use --show-all)." in cut.text

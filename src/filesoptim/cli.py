@@ -17,7 +17,6 @@ from filesoptim import __version__
 from filesoptim.clean import Cleaner
 from filesoptim.config import (
     DEFAULT_CONFIG_TOML,
-    OPTIMIZE_TYPES,
     SORT_CATEGORIES,
     Config,
     ConfigError,
@@ -37,6 +36,7 @@ from filesoptim.dupes import (
     render_groups,
 )
 from filesoptim.fsutils import WalkOptions
+from filesoptim.helptext import HelpText
 from filesoptim.optimize import Engine
 from filesoptim.report import build_report, render_report, report_to_dict
 from filesoptim.scan import big_files, broken_links, empty_dirs, protected_dirs, topmost
@@ -48,21 +48,10 @@ from filesoptim.sorting.executor import (
     plan_undo,
     read_journal,
 )
-from filesoptim.sorting.planner import Planner, SortOptions, export_plan, preview
+from filesoptim.sorting.planner import Planner, SortOptions, SortPlan, export_plan, preview
 from filesoptim.state import StateDB
 from filesoptim.tools import Tools, install_hint
 from filesoptim.ui import Console, human_size, parse_size
-
-EPILOG = """\
-examples:
-  filesoptim optimize ~/Pictures --estimate-only   exact estimate, nothing changed
-  filesoptim optimize ~/Pictures ~/Videos          estimate, confirm, then optimise
-  filesoptim sort ~/Downloads/Photos --dest ~/Pictures --rename --fix-dates --tag
-  filesoptim undo                                  revert the last sort
-  filesoptim clean --dry-run                       what cleaning would free
-  filesoptim dupes ~ --action trash --keep oldest
-  filesoptim report ~ --estimate --dupes
-"""
 
 Handler = Callable[[argparse.Namespace, Config, Console, Tools], int]
 
@@ -163,6 +152,11 @@ def cmd_sort(args: argparse.Namespace, config: Config, console: Console, tools: 
         console.warn("exiftool is missing: dates and keywords cannot be written "
                       f"({install_hint(['exiftool'], tools)}).")
     plan = Planner(config, tools).plan(options)
+    return _preview_and_apply(plan, args, console, tools)
+
+
+def _preview_and_apply(plan: SortPlan, args: argparse.Namespace, console: Console,
+                       tools: Tools) -> int:
     preview(plan, console, limit=None if args.show_all else 30)
     if args.export_plan:
         export_plan(plan, Path(args.export_plan))
@@ -179,6 +173,33 @@ def cmd_sort(args: argparse.Namespace, config: Config, console: Console, tools: 
     console.success(f"{result.done} operation(s) done.")
     console.info(f"To revert: filesoptim undo {result.journal}")
     return 1 if result.failures else 0
+
+
+def cmd_tag(args: argparse.Namespace, config: Config, console: Console, tools: Tools) -> int:
+    """Metadata only: keywords, missing dates, mtime. Nothing is moved nor renamed."""
+    source = existing_paths([args.source])[0]
+    if not source.is_dir():
+        raise UsageError(f"{source} is not a folder")
+    only = split_list(args.only) or ["image", "video"]
+    unknown = set(only) - {"image", "video"}
+    if unknown:
+        raise UsageError(f"tag works on image and video only (got {', '.join(sorted(unknown))})")
+    if not tools.has("exiftool"):
+        raise UsageError("exiftool is needed to write metadata: "
+                         f"{install_hint(['exiftool'], tools)}")
+    if args.only_my_tags:
+        config.sort.tags.category = config.sort.tags.camera = config.sort.tags.folder = False
+        config.sort.tags.extra = []
+    extra = split_list(args.tags)
+    keywords = not args.no_keywords
+    if not (keywords or args.fix_dates or args.set_mtime):
+        raise UsageError("nothing to do: --no-keywords needs --fix-dates or --set-mtime")
+    options = SortOptions(source=source, destination=source, rename=False,
+                          fix_dates=args.fix_dates, tag=keywords,
+                          extra_tags=extra if keywords else [], only=only,
+                          set_mtime=args.set_mtime, recursive=not args.flat, in_place=True)
+    plan = Planner(config, tools).plan(options)
+    return _preview_and_apply(plan, args, console, tools)
 
 
 def cmd_undo(args: argparse.Namespace, config: Config, console: Console, tools: Tools) -> int:
@@ -360,161 +381,174 @@ def cmd_config(args: argparse.Namespace, config: Config, console: Console, tools
 # ------------------------------------------------------------------------------------------
 # Parser
 # ------------------------------------------------------------------------------------------
-def _common_parser() -> argparse.ArgumentParser:
+def _common_parser(h: HelpText) -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("-v", "--verbose", action="store_true", help="show details")
-    common.add_argument("-q", "--quiet", action="store_true", help="only warnings and errors")
-    common.add_argument("--no-color", action="store_true", help="disable colours")
-    common.add_argument("--config", type=Path, help="configuration file to use")
+    common.add_argument("-v", "--verbose", action="store_true", help=h("common.verbose"))
+    common.add_argument("-q", "--quiet", action="store_true", help=h("common.quiet"))
+    common.add_argument("--no-color", action="store_true", help=h("common.no_color"))
+    common.add_argument("--config", type=Path, metavar="FILE", help=h("common.config"))
     return common
 
 
-def _walk_parser() -> argparse.ArgumentParser:
+def _walk_parser(h: HelpText) -> argparse.ArgumentParser:
     walk = argparse.ArgumentParser(add_help=False)
-    walk.add_argument("--include-hidden", action="store_true",
-                      help="also visit hidden files and folders")
+    walk.add_argument("--include-hidden", action="store_true", help=h("walk.include_hidden"))
     walk.add_argument("--exclude", action="append", default=[], metavar="PATTERN",
-                      help="skip names matching this glob pattern (repeatable)")
-    walk.add_argument("--cross-filesystems", action="store_true",
-                      help="enter other mounted filesystems")
+                      help=h("walk.exclude"))
+    walk.add_argument("--cross-filesystems", action="store_true", help=h("walk.cross"))
     return walk
 
 
-def _confirm_parser() -> argparse.ArgumentParser:
+def _confirm_parser(h: HelpText) -> argparse.ArgumentParser:
     confirm = argparse.ArgumentParser(add_help=False)
-    confirm.add_argument("-y", "--yes", action="store_true",
-                         help="apply without asking (the preview is still shown)")
-    confirm.add_argument("-n", "--dry-run", action="store_true",
-                         help="only show what would be done")
+    confirm.add_argument("-y", "--yes", action="store_true", help=h("confirm.yes"))
+    confirm.add_argument("-n", "--dry-run", action="store_true", help=h("confirm.dry_run"))
     return confirm
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="filesoptim",
-        description="Keep a Linux computer lean and tidy: lossless optimisation, sorting, "
-                    "tagging, cleaning, duplicates and reports. Every command previews or "
-                    "estimates before changing anything.",
-        epilog=EPILOG,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    sub = parser.add_subparsers(dest="command", metavar="COMMAND")
-    common, walk, confirm = _common_parser(), _walk_parser(), _confirm_parser()
+class _Formatter(argparse.RawDescriptionHelpFormatter):
+    """Keeps the line breaks of descriptions/examples; translated "usage:" prefix."""
 
-    def add(name: str, handler: Handler, help_text: str,
+    usage_prefix = "usage: "
+
+    def add_usage(self, usage: str | None, actions: Any, groups: Any,
+                  prefix: str | None = None) -> None:
+        super().add_usage(usage, actions, groups, self.usage_prefix if prefix is None else prefix)
+
+
+def _localise(parser: argparse.ArgumentParser, h: HelpText) -> argparse.ArgumentParser:
+    parser._positionals.title = h("argparse.positionals")
+    parser._optionals.title = h("argparse.options")
+    parser.add_argument("-h", "--help", action="help", default=argparse.SUPPRESS,
+                        help=h("argparse.help"))
+    return parser
+
+
+def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
+    h = HelpText(lang)
+    class raw(_Formatter):  # formatter bound to the chosen language
+        usage_prefix = h("argparse.usage")
+
+    parser = _localise(argparse.ArgumentParser(
+        prog="filesoptim", description=h("prog.description"), epilog=h("prog.epilog"),
+        formatter_class=raw, add_help=False), h)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}",
+                        help=h("argparse.version"))
+    sub = parser.add_subparsers(dest="command", metavar="COMMAND")
+    common, walk, confirm = _common_parser(h), _walk_parser(h), _confirm_parser(h)
+
+    def add(name: str, handler: Handler,
             parents: Sequence[argparse.ArgumentParser] = ()) -> argparse.ArgumentParser:
-        command = sub.add_parser(name, help=help_text, description=help_text,
-                                 parents=[common, *parents])
+        command = _localise(sub.add_parser(
+            name, help=h(f"{name}.summary"), description=h(f"{name}.description"),
+            epilog=h(f"{name}.epilog"), formatter_class=raw, parents=[common, *parents],
+            add_help=False), h)
         command.set_defaults(handler=handler)
         return command
 
-    p = add("optimize", cmd_optimize,
-            "estimate precisely, then optimise images, PDF and videos without visible loss",
-            [walk, confirm])
-    p.add_argument("paths", nargs="+", metavar="PATH")
-    p.add_argument("-t", "--types", help=f"comma list among {', '.join(OPTIMIZE_TYPES)}")
-    p.add_argument("--estimate-only", action="store_true",
-                   help="stop after the estimate (same as --dry-run)")
-    p.add_argument("--force", action="store_true", help="ignore the memory of processed files")
-    p.add_argument("-j", "--jobs", type=int, help="parallel workers for images/PDF")
-    p.add_argument("--min-saving", type=float, metavar="PCT", help="lossless minimum gain")
-    p.add_argument("--keep-originals", choices=("auto", "never", "trash", "backup"))
-    p.add_argument("--backup-dir", help="where originals go with --keep-originals backup")
+    p = add("optimize", cmd_optimize, [walk, confirm])
+    p.add_argument("paths", nargs="+", metavar="PATH", help=h("optimize.paths"))
+    p.add_argument("-t", "--types", metavar="TYPES", help=h("optimize.types"))
+    p.add_argument("--estimate-only", action="store_true", help=h("optimize.estimate_only"))
+    p.add_argument("--force", action="store_true", help=h("optimize.force"))
+    p.add_argument("-j", "--jobs", type=int, metavar="N", help=h("optimize.jobs"))
+    p.add_argument("--min-saving", type=float, metavar="PCT", help=h("optimize.min_saving"))
+    p.add_argument("--keep-originals", choices=("auto", "never", "trash", "backup"),
+                   help=h("optimize.keep_originals"))
+    p.add_argument("--backup-dir", metavar="DIR", help=h("optimize.backup_dir"))
     p.add_argument("--jpeg-progressive", action=argparse.BooleanOptionalAction, default=None,
-                   help="lossless conversion to progressive JPEG")
-    p.add_argument("--codec", choices=("hevc", "av1"), help="video codec")
-    p.add_argument("--crf", type=int, help="video quality (lower = better, 0 = default)")
-    p.add_argument("--preset", help="encoder preset (speed/size trade-off)")
-    p.add_argument("--metric", choices=("ssim", "vmaf"), help="video quality metric")
-    p.add_argument("--min-ssim", type=float, help="minimum SSIM (default 0.98)")
-    p.add_argument("--min-vmaf", type=float, help="minimum VMAF (default 95)")
+                   help=h("optimize.progressive"))
+    p.add_argument("--codec", choices=("hevc", "av1"), help=h("optimize.codec"))
+    p.add_argument("--crf", type=int, metavar="N", help=h("optimize.crf"))
+    p.add_argument("--preset", metavar="NAME", help=h("optimize.preset"))
+    p.add_argument("--metric", choices=("ssim", "vmaf"), help=h("optimize.metric"))
+    p.add_argument("--min-ssim", type=float, metavar="X", help=h("optimize.min_ssim"))
+    p.add_argument("--min-vmaf", type=float, metavar="X", help=h("optimize.min_vmaf"))
     p.add_argument("--video-min-saving", type=float, metavar="PCT",
-                   help="minimum video gain (default 20)")
-    p.add_argument("--pdf-mode",
-                   choices=("lossless", "printer", "ebook", "prepress", "screen", "default"))
-    p.add_argument("--min-age", type=int, metavar="SECONDS",
-                   help="skip files modified more recently than this")
+                   help=h("optimize.video_min_saving"))
+    p.add_argument("--pdf-mode", metavar="MODE",
+                   choices=("lossless", "printer", "ebook", "prepress", "screen", "default"),
+                   help=h("optimize.pdf_mode"))
+    p.add_argument("--min-age", type=int, metavar="SECONDS", help=h("optimize.min_age"))
 
-    p = add("sort", cmd_sort, "sort files into folders (Year/Month...), rename and tag them",
-            [confirm])
-    p.add_argument("source", metavar="SOURCE")
-    p.add_argument("--dest", help="destination root (default: SOURCE itself)")
-    p.add_argument("--copy", action="store_true", help="copy instead of moving")
-    p.add_argument("--rename", action="store_true", help="rename from the date / music tags")
-    p.add_argument("--fix-dates", action="store_true",
-                   help="write the missing date (found in the file name) into the metadata")
-    p.add_argument("--tag", action="store_true", help="add XMP keywords")
-    p.add_argument("--tags", help="extra keywords, comma separated (implies --tag)")
-    p.add_argument("--only", help=f"comma list among {', '.join(SORT_CATEGORIES)}")
+    p = add("sort", cmd_sort, [confirm])
+    p.add_argument("source", metavar="SOURCE", help=h("sort.source"))
+    p.add_argument("--dest", metavar="DIR", help=h("sort.dest"))
+    p.add_argument("--copy", action="store_true", help=h("sort.copy"))
+    p.add_argument("--rename", action="store_true", help=h("sort.rename"))
+    p.add_argument("--fix-dates", action="store_true", help=h("sort.fix_dates"))
+    p.add_argument("--tag", action="store_true", help=h("sort.tag"))
+    p.add_argument("--tags", metavar="WORDS", help=h("sort.tags"))
+    p.add_argument("--only", metavar="CATEGORIES", help=h("sort.only"))
     p.add_argument("--leave-sorted", action="append", default=[], metavar="PATTERN",
-                   help="never touch files in folders matching this pattern, relative to "
-                        "SOURCE: * = one folder, ** = any depth, {year}, {month} "
-                        "(e.g. \"{year}/*\" for Year/Event); repeatable")
+                   help=h("sort.leave_sorted"))
     p.add_argument("--template", action="append", default=[], metavar="CATEGORY=TEMPLATE",
-                   help="destination folder for a category, e.g. "
-                        "\"image={year}/{year}-{month}\" (repeatable)")
-    p.add_argument("--no-mtime", action="store_true",
-                   help="never date a file from its modification time")
-    p.add_argument("--set-mtime", action="store_true",
-                   help="set the file modification time to the date found")
-    p.add_argument("--prune-empty", action="store_true",
-                   help="remove source folders left empty")
-    p.add_argument("--flat", action="store_true", help="do not look into sub-folders")
-    p.add_argument("--show-all", action="store_true", help="list every planned operation")
-    p.add_argument("--export-plan", metavar="FILE", help="save the full plan as JSON")
+                   help=h("sort.template"))
+    p.add_argument("--no-mtime", action="store_true", help=h("sort.no_mtime"))
+    p.add_argument("--set-mtime", action="store_true", help=h("sort.set_mtime"))
+    p.add_argument("--prune-empty", action="store_true", help=h("sort.prune_empty"))
+    p.add_argument("--flat", action="store_true", help=h("sort.flat"))
+    p.add_argument("--show-all", action="store_true", help=h("sort.show_all"))
+    p.add_argument("--export-plan", metavar="FILE", help=h("sort.export_plan"))
 
-    p = add("undo", cmd_undo, "revert a sort using its journal", [confirm])
-    p.add_argument("journal", nargs="?", help="journal file (default: the latest)")
-    p.add_argument("--list", action="store_true", help="list the journals")
+    p = add("tag", cmd_tag, [confirm])
+    p.add_argument("source", metavar="FOLDER", help=h("tag.source"))
+    p.add_argument("--tags", metavar="WORDS", help=h("tag.tags"))
+    p.add_argument("--only-my-tags", action="store_true", help=h("tag.only_my_tags"))
+    p.add_argument("--no-keywords", action="store_true", help=h("tag.no_keywords"))
+    p.add_argument("--fix-dates", action="store_true", help=h("sort.fix_dates"))
+    p.add_argument("--set-mtime", action="store_true", help=h("sort.set_mtime"))
+    p.add_argument("--only", metavar="CATEGORIES", help=h("tag.only"))
+    p.add_argument("--flat", action="store_true", help=h("sort.flat"))
+    p.add_argument("--show-all", action="store_true", help=h("sort.show_all"))
+    p.add_argument("--export-plan", metavar="FILE", help=h("sort.export_plan"))
 
-    p = add("clean", cmd_clean, "clean caches, old trash, logs (exact size shown first)",
-            [confirm])
-    p.add_argument("--only", help="comma list of targets (see --list)")
-    p.add_argument("--system", action="store_true",
-                   help="also clean system targets (package caches, journal; needs root)")
-    p.add_argument("--list", action="store_true", help="list the available targets")
+    p = add("undo", cmd_undo, [confirm])
+    p.add_argument("journal", nargs="?", metavar="JOURNAL", help=h("undo.journal"))
+    p.add_argument("--list", action="store_true", help=h("undo.list"))
 
-    p = add("dupes", cmd_dupes, "find (and remove or link) duplicate files", [walk, confirm])
-    p.add_argument("paths", nargs="+", metavar="PATH")
-    p.add_argument("--min-size", default="1", help="ignore smaller files (e.g. 100k, 1M)")
-    p.add_argument("--action", choices=ACTIONS, default="report")
-    p.add_argument("--keep", choices=KEEP_STRATEGIES, default="oldest",
-                   help="which copy is kept")
+    p = add("clean", cmd_clean, [confirm])
+    p.add_argument("--only", metavar="TARGETS", help=h("clean.only"))
+    p.add_argument("--system", action="store_true", help=h("clean.system"))
+    p.add_argument("--list", action="store_true", help=h("clean.list"))
+
+    p = add("dupes", cmd_dupes, [walk, confirm])
+    p.add_argument("paths", nargs="+", metavar="PATH", help=h("dupes.paths"))
+    p.add_argument("--min-size", default="1", metavar="SIZE", help=h("dupes.min_size"))
+    p.add_argument("--action", choices=ACTIONS, default="report", help=h("dupes.action"))
+    p.add_argument("--keep", choices=KEEP_STRATEGIES, default="oldest", help=h("dupes.keep"))
     p.add_argument("--prefer", action="append", default=[], metavar="DIR",
-                   help="keep copies located in this folder (repeatable)")
-    p.add_argument("--show-all", action="store_true")
-    p.add_argument("--json", action="store_true")
+                   help=h("dupes.prefer"))
+    p.add_argument("--show-all", action="store_true", help=h("dupes.show_all"))
+    p.add_argument("--json", action="store_true", help=h("dupes.json"))
 
-    p = add("bigfiles", cmd_bigfiles, "list the biggest files", [walk])
-    p.add_argument("paths", nargs="+", metavar="PATH")
-    p.add_argument("--top", type=int, default=20)
-    p.add_argument("--min-size", default="0")
-    p.add_argument("--json", action="store_true")
+    p = add("bigfiles", cmd_bigfiles, [walk])
+    p.add_argument("paths", nargs="+", metavar="PATH", help=h("bigfiles.paths"))
+    p.add_argument("--top", type=int, default=20, metavar="N", help=h("bigfiles.top"))
+    p.add_argument("--min-size", default="0", metavar="SIZE", help=h("bigfiles.min_size"))
+    p.add_argument("--json", action="store_true", help=h("bigfiles.json"))
 
-    p = add("emptydirs", cmd_emptydirs, "find (and remove) empty folders", [walk, confirm])
-    p.add_argument("paths", nargs="+", metavar="PATH")
-    p.add_argument("--delete", action="store_true")
+    p = add("emptydirs", cmd_emptydirs, [walk, confirm])
+    p.add_argument("paths", nargs="+", metavar="PATH", help=h("emptydirs.paths"))
+    p.add_argument("--delete", action="store_true", help=h("emptydirs.delete"))
 
-    p = add("brokenlinks", cmd_brokenlinks, "find (and delete) broken symbolic links",
-            [walk, confirm])
-    p.add_argument("paths", nargs="+", metavar="PATH")
-    p.add_argument("--delete", action="store_true")
+    p = add("brokenlinks", cmd_brokenlinks, [walk, confirm])
+    p.add_argument("paths", nargs="+", metavar="PATH", help=h("brokenlinks.paths"))
+    p.add_argument("--delete", action="store_true", help=h("brokenlinks.delete"))
 
-    p = add("report", cmd_report, "disk usage report and recoverable space", [walk])
-    p.add_argument("paths", nargs="*", metavar="PATH", help="default: your home folder")
-    p.add_argument("--top", type=int, default=10)
-    p.add_argument("--estimate", action="store_true",
-                   help="exact optimisation estimate (can be slow for videos)")
-    p.add_argument("--dupes", action="store_true", help="include duplicates")
-    p.add_argument("--json", action="store_true")
+    p = add("report", cmd_report, [walk])
+    p.add_argument("paths", nargs="*", metavar="PATH", help=h("report.paths"))
+    p.add_argument("--top", type=int, default=10, metavar="N", help=h("report.top"))
+    p.add_argument("--estimate", action="store_true", help=h("report.estimate"))
+    p.add_argument("--dupes", action="store_true", help=h("report.dupes"))
+    p.add_argument("--json", action="store_true", help=h("report.json"))
 
-    add("doctor", cmd_doctor, "check installed tools and features")
+    add("doctor", cmd_doctor)
 
-    p = add("config", cmd_config, "show the effective configuration or create the file")
-    p.add_argument("--init", action="store_true", help="write a commented default file")
-    p.add_argument("--force", action="store_true", help="overwrite with --init")
-    p.add_argument("--path", action="store_true", help="print the configuration file path")
+    p = add("config", cmd_config)
+    p.add_argument("--init", action="store_true", help=h("config.init"))
+    p.add_argument("--force", action="store_true", help=h("config.force"))
+    p.add_argument("--path", action="store_true", help=h("config.path"))
     return parser
 
 

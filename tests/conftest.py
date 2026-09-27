@@ -31,6 +31,7 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
                       ("XDG_DATA_HOME", ".local/share"), ("XDG_STATE_HOME", ".local/state")):
         monkeypatch.setenv(name, str(home / sub))
     monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("FILESOPTIM_LANG", "en")  # help texts in a known language
     return home
 
 

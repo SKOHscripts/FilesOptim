@@ -88,6 +88,7 @@ class SortOptions:
     set_mtime: bool = False
     prune_empty: bool = False
     recursive: bool = True
+    in_place: bool = False  # metadata only: files are never moved nor renamed
 
 
 @dataclass
@@ -356,10 +357,13 @@ class Planner:
             if options.only and info.category not in options.only:
                 plan.skipped.append((path, "category not selected"))
                 continue
-            values = self.values(info)
-            folder = self.folder_for(info, values)
-            directory = path.parent if folder is None else options.destination / folder
-            target = directory / self.name_for(info, values, options.rename)
+            if options.in_place:
+                target = path
+            else:
+                values = self.values(info)
+                folder = self.folder_for(info, values)
+                directory = path.parent if folder is None else options.destination / folder
+                target = directory / self.name_for(info, values, options.rename)
             resolved, reason = self._resolve(path, target, taken)
             if resolved is None:
                 plan.skipped.append((path, reason))
@@ -372,7 +376,8 @@ class Planner:
                 if abs(path.stat().st_mtime - stamp) > 1:
                     op.set_mtime = stamp
             if action == "keep" and not op.changes_metadata and op.set_mtime is None:
-                plan.skipped.append((path, "already in place"))
+                plan.skipped.append(
+                    (path, "nothing to change" if options.in_place else "already in place"))
                 continue
             taken[resolved] = path
             plan.ops.append(op)
@@ -416,9 +421,39 @@ def describe_op(op: SortOp) -> str:
     return "; ".join(notes)
 
 
+def _date_text(op: SortOp) -> str:
+    return f"{op.date:%Y-%m-%d %H:%M} ({op.date_source})" if op.date else ""
+
+
+def _preview_metadata(plan: SortPlan, console: Console, *, limit: int | None) -> None:
+    """Preview of the metadata-only mode: one line per file with every change in full."""
+    console.info(f"{len(plan.ops)} file(s) to update, {len(plan.skipped)} left untouched.")
+    shown = plan.ops if limit is None else plan.ops[:limit]
+    if shown:
+        rows = [[display_path(op.source, plan.options.source), _date_text(op), describe_op(op)]
+                for op in shown]
+        console.table(["file", "date (source)", "changes"], rows, max_width=100)
+    if len(shown) < len(plan.ops):
+        console.info(f"… and {len(plan.ops) - len(shown)} more (use --show-all).")
+    _preview_skipped(plan, console)
+
+
+def _preview_skipped(plan: SortPlan, console: Console) -> None:
+    if plan.skipped:
+        console.info("Left untouched:")
+        for reason, count in Counter(r.split(" (")[0] for _, r in plan.skipped).most_common():
+            console.info(f"  {count:>6}  {reason}")
+        for path, reason in plan.skipped:
+            console.debug(f"  {display_path(path, plan.options.source)}: {reason}")
+
+
 def preview(plan: SortPlan, console: Console, *, limit: int | None = 30) -> None:
     options = plan.options
-    console.heading("Sorting plan (preview: nothing has been changed yet)")
+    what = "Metadata plan" if options.in_place else "Sorting plan"
+    console.heading(f"{what} (preview: nothing has been changed yet)")
+    if options.in_place:
+        _preview_metadata(plan, console, limit=limit)
+        return
     moves = plan.moves
     meta = [op for op in plan.ops if op.changes_metadata]
     renamed = [op for op in moves if op.source.name != op.destination.name]
@@ -434,7 +469,7 @@ def preview(plan: SortPlan, console: Console, *, limit: int | None = 30) -> None
     if shown:
         rows = []
         for op in shown:
-            date = f"{op.date:%Y-%m-%d %H:%M} ({op.date_source})" if op.date else ""
+            date = _date_text(op)
             rows.append([
                 op.action,
                 display_path(op.source, options.source),
@@ -445,12 +480,7 @@ def preview(plan: SortPlan, console: Console, *, limit: int | None = 30) -> None
         console.table(["action", "from", "to", "date (source)", "changes"], rows, max_width=48)
         if len(shown) < len(plan.ops):
             console.info(f"… and {len(plan.ops) - len(shown)} more (use --show-all).")
-    if plan.skipped:
-        console.info("Left untouched:")
-        for reason, count in Counter(r.split(" (")[0] for _, r in plan.skipped).most_common():
-            console.info(f"  {count:>6}  {reason}")
-        for path, reason in plan.skipped:
-            console.debug(f"  {display_path(path, options.source)}: {reason}")
+    _preview_skipped(plan, console)
     undated = [op for op in plan.ops if op.date_source == "mtime"]
     if undated:
         console.warn(f"{len(undated)} file(s) dated from their modification time only "
