@@ -139,6 +139,27 @@ other = ""                      # "" : laisser en place
 - Les fichiers annexes (`.xmp`, `.aae`, `.thm`) suivent leur photo.
 - Un doublon exact n'est jamais déplacé par-dessus un fichier existant : il est signalé. Un conflit de nom reçoit un suffixe `_1`.
 
+### Trier un dossier déjà en partie trié
+
+Pour une photothèque déjà rangée en partie à la main (par exemple `2019/Vacances Bretagne/`), `--leave-sorted` indique les dossiers à ne jamais toucher. Seules les photos en vrac sont triées, directement dans la structure existante :
+
+```bash
+filesoptim sort ~/Photos \
+    --leave-sorted "{year}/*" \
+    --template "image={year}/{year}-{month}" --template "video={year}/{year}-{month}" \
+    --only image,video --no-mtime --prune-empty -n      # aperçu ; retirer -n pour appliquer
+```
+
+- `--leave-sorted "{year}/*"` protège `2019/Vacances Bretagne/…` et ses sous-dossiers. Dans un motif :
+  - `*` représente un nom de dossier ;
+  - `**` représente n'importe quelle profondeur ;
+  - `{year}` représente une année, `{month}` un mois.
+  L'option peut être répétée, ou réglée dans la configuration (`leave_sorted`).
+- Une photo en vrac identique à une photo déjà rangée n'est pas déplacée : elle est signalée comme doublon (`filesoptim dupes` permet ensuite de la supprimer).
+- `--template` choisit le dossier de destination sans modifier la configuration. Ici, les photos en vrac vont dans `2021/2021-03/`, à côté des dossiers d'événements.
+- Avec `--no-mtime`, les photos sans aucune date fiable vont dans `Undated/`, à vérifier à la main.
+- Relancer la commande ne déplace plus rien : ce qui a été rangé correspond ensuite au motif.
+
 ### Configuration
 
 ```bash

@@ -151,6 +151,7 @@ class SortConfig:
     use_mtime: bool = True
     lowercase_extension: bool = True
     sidecar_extensions: list[str] = field(default_factory=lambda: ["xmp", "aae", "thm"])
+    leave_sorted: list[str] = field(default_factory=list)
     tags: TagConfig = field(default_factory=TagConfig)
 
 
@@ -370,6 +371,7 @@ undated = "Undated"         # folder used when no reliable date is found
 use_mtime = true            # fall back to the file modification time for the date
 lowercase_extension = true
 sidecar_extensions = ["xmp", "aae", "thm"]
+leave_sorted = []           # folders already sorted by hand, never touched, e.g. ["{year}/*"]
 
 [sort.templates]            # destination folder per category ("" = leave in place)
 image = "Photos/{year}/{month}"

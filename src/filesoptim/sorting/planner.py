@@ -9,7 +9,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from filesoptim.categories import CATEGORY_LABELS, extension
@@ -26,6 +26,51 @@ from filesoptim.sorting.metadata import MediaInfo, MetadataReader, can_write_met
 from filesoptim.tools import Tools
 from filesoptim.ui import Console
 
+_PLACEHOLDER_RE = {"{year}": r"(?:19|20)\d{2}", "{month}": r"(?:0[1-9]|1[0-2])"}
+
+
+def compile_folder_pattern(pattern: str) -> re.Pattern[str]:
+    """``"{year}/*"`` -> regex for folder paths relative to the sorted folder.
+
+    ``*`` is one folder name (or part of it), ``**`` any depth, ``?`` one character,
+    ``{year}`` a year (1900-2099) and ``{month}`` 01-12. Case is ignored.
+    """
+    text = pattern.strip().strip("/")
+    parts: list[str] = []
+    index = 0
+    while index < len(text):
+        if text.startswith("**", index):
+            parts.append(".*")
+            index += 2
+            continue
+        token = next((t for t in _PLACEHOLDER_RE if text.startswith(t, index)), None)
+        if token is not None:
+            parts.append(_PLACEHOLDER_RE[token])
+            index += len(token)
+        elif text[index] == "*":
+            parts.append("[^/]*")
+            index += 1
+        elif text[index] == "?":
+            parts.append("[^/]")
+            index += 1
+        else:
+            parts.append(re.escape(text[index]))
+            index += 1
+    return re.compile("".join(parts), re.IGNORECASE)
+
+
+def sorted_by_hand(folder: PurePosixPath, patterns: Sequence[str]) -> str | None:
+    """The pattern matching ``folder`` (or one of its parents), if any."""
+    candidates = [c for c in (folder, *folder.parents) if str(c) != "."]
+    for pattern in patterns:
+        if not pattern.strip().strip("/"):
+            continue
+        regex = compile_folder_pattern(pattern)
+        if any(regex.fullmatch(c.as_posix()) for c in candidates):
+            return pattern
+    return None
+
+
 _GENERIC_FOLDER_RE = re.compile(r"\d{3}[a-z_]*\w*|(19|20)\d{2}([-_ .]?\d{2}){0,2}")
 
 
@@ -39,6 +84,7 @@ class SortOptions:
     tag: bool = False
     extra_tags: list[str] = field(default_factory=list)
     only: list[str] = field(default_factory=list)
+    leave_sorted: list[str] = field(default_factory=list)
     set_mtime: bool = False
     prune_empty: bool = False
     recursive: bool = True
@@ -102,6 +148,16 @@ class _Lenient(string.Formatter):
             return format(value, format_spec)
         except (ValueError, TypeError):  # e.g. "{date:%Y}" without a date
             return str(value)
+
+
+_DATE_FIELDS = frozenset({"year", "month", "day", "date"})
+
+
+def _uses_date(component: str) -> bool:
+    for _, field_name, _, _ in string.Formatter().parse(component):
+        if field_name and re.split(r"[.\[]", field_name, maxsplit=1)[0] in _DATE_FIELDS:
+            return True
+    return False
 
 
 def check_template(template: str) -> None:
@@ -181,11 +237,21 @@ class Planner:
         if not template:
             return None
         check_template(template)
-        try:
-            rendered = _Lenient(self.config.sort.unknown).format(template, **values)
-        except (ValueError, TypeError, IndexError, AttributeError) as exc:
-            raise ConfigError(f"cannot use template {template!r}: {exc}") from exc
-        parts = [sanitize_component(p) for p in rendered.split("/") if p.strip(" .")]
+        formatter = _Lenient(self.config.sort.unknown)
+        rendered: list[str] = []
+        undated = False
+        for component in template.split("/"):
+            if info.date is None and _uses_date(component):
+                # "{year}/{year}-{month}" without a date -> a single "Undated" folder
+                if not undated:
+                    rendered.append(self.config.sort.undated)
+                    undated = True
+                continue
+            try:
+                rendered.append(formatter.format(component, **values))
+            except (ValueError, TypeError, IndexError, AttributeError) as exc:
+                raise ConfigError(f"cannot use template {template!r}: {exc}") from exc
+        parts = [sanitize_component(p) for p in "/".join(rendered).split("/") if p.strip(" .")]
         return Path(*parts) if parts else Path()
 
     def name_for(self, info: MediaInfo, values: dict[str, Any], rename: bool) -> str:
@@ -267,8 +333,26 @@ class Planner:
         mains, sidecars = self.split_sidecars(self._files(options))
         infos = self.reader.read(mains)
         taken: dict[Path, Path] = {}
+        by_hand: dict[Path, str] = {}
+        library: dict[int, list[Path]] = {}  # files left where they are, by size
+        for path in mains:
+            relative = PurePosixPath(path.parent.relative_to(options.source).as_posix())
+            pattern = sorted_by_hand(relative, options.leave_sorted)
+            if pattern is not None:
+                by_hand[path] = pattern
+                library.setdefault(path.stat().st_size, []).append(path)
         for path in mains:
             info = infos[path]
+            if path in by_hand:
+                reason = f"already sorted by hand (matches {by_hand[path]!r})"
+                plan.skipped.append((path, reason))
+                continue
+            twin = next((other for other in library.get(path.stat().st_size, [])
+                         if same_content(other, path)), None)
+            if twin is not None:
+                shown = display_path(twin, options.source)
+                plan.skipped.append((path, f"duplicate of {shown} (already in your library)"))
+                continue
             if options.only and info.category not in options.only:
                 plan.skipped.append((path, "category not selected"))
                 continue

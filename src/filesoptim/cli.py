@@ -139,6 +139,12 @@ def cmd_sort(args: argparse.Namespace, config: Config, console: Console, tools: 
                          f"(choose among {', '.join(SORT_CATEGORIES)})")
     if args.no_mtime:
         config.sort.use_mtime = False
+    for rule in args.template:
+        category, sep, template = rule.partition("=")
+        if not sep or category.strip() not in SORT_CATEGORIES:
+            raise UsageError(f"--template expects CATEGORY=TEMPLATE with CATEGORY among "
+                             f"{', '.join(SORT_CATEGORIES)} (got {rule!r})")
+        config.sort.templates[category.strip()] = template.strip()
     options = SortOptions(
         source=source,
         destination=Path(args.dest).expanduser() if args.dest else source,
@@ -148,6 +154,7 @@ def cmd_sort(args: argparse.Namespace, config: Config, console: Console, tools: 
         tag=args.tag or bool(args.tags),
         extra_tags=split_list(args.tags),
         only=only,
+        leave_sorted=[*config.sort.leave_sorted, *args.leave_sorted],
         set_mtime=args.set_mtime,
         prune_empty=args.prune_empty,
         recursive=not args.flat,
@@ -440,6 +447,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tag", action="store_true", help="add XMP keywords")
     p.add_argument("--tags", help="extra keywords, comma separated (implies --tag)")
     p.add_argument("--only", help=f"comma list among {', '.join(SORT_CATEGORIES)}")
+    p.add_argument("--leave-sorted", action="append", default=[], metavar="PATTERN",
+                   help="never touch files in folders matching this pattern, relative to "
+                        "SOURCE: * = one folder, ** = any depth, {year}, {month} "
+                        "(e.g. \"{year}/*\" for Year/Event); repeatable")
+    p.add_argument("--template", action="append", default=[], metavar="CATEGORY=TEMPLATE",
+                   help="destination folder for a category, e.g. "
+                        "\"image={year}/{year}-{month}\" (repeatable)")
     p.add_argument("--no-mtime", action="store_true",
                    help="never date a file from its modification time")
     p.add_argument("--set-mtime", action="store_true",

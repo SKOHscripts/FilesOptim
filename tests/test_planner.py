@@ -172,19 +172,23 @@ def test_templates(tmp_path: Path, config: Config) -> None:
     touch(src / "undated.jpg")
     touch(src / "song.mp3")
     config.sort.templates["image"] = "{camera}/{year}/{month}/{date:%d}"
-    config.sort.templates["audio"] = "{genre}/{artist}"
+    config.sort.templates["audio"] = "{genre}/{artist:%Y}"  # a spec that does not fit: ignored
     plan = planner(config, **{"undated.jpg": {"date": None, "date_source": ""}}).plan(
         SortOptions(src, src))
     assert dests(plan, src) == {
-        "undated.jpg": "Unknown/Undated/Unknown/undated.jpg",
+        "undated.jpg": "Unknown/Undated/undated.jpg",  # date parts collapse into "Undated"
         "song.mp3": "Unknown/Unknown/song.mp3",
     }
-    config.sort.templates["image"] = "{month}"  # renders to nothing: stays at the root
+    config.sort.templates["image"] = "{year}/{year}-{month}"
+    flat = planner(config, **{"undated.jpg": {"date": None}}).plan(SortOptions(src, src))
+    assert dests(flat, src)["undated.jpg"] == "Undated/undated.jpg"
+    config.sort.templates["image"] = "{camera}"
+    config.sort.unknown = ""  # renders to nothing: stays at the root
     flat = planner(config, **{"undated.jpg": {"date": None}}).plan(SortOptions(src, src))
     assert (src / "undated.jpg", "already in place") in flat.skipped
 
 
-@pytest.mark.parametrize("template", ["{year", "{date.year}", "{year!z}"])
+@pytest.mark.parametrize("template", ["{year", "{camera.model}", "{camera!z}"])
 def test_invalid_templates(tmp_path: Path, config: Config, template: str) -> None:
     touch(tmp_path / "src" / "a.jpg")
     config.sort.templates["image"] = template
@@ -329,3 +333,41 @@ def test_describe_and_serialise() -> None:
     assert describe_op(bare) == ""
     assert bare.to_dict()["date"] is None and bare.to_dict()["sidecar_of"] is None
     assert op.to_dict()["sidecar_of"] == "/a/y.jpg"
+
+
+def test_folder_patterns() -> None:
+    from pathlib import PurePosixPath as P
+
+    from filesoptim.sorting.planner import compile_folder_pattern, sorted_by_hand
+
+    assert compile_folder_pattern("{year}/*").fullmatch("2019/Vacances Bretagne")
+    assert not compile_folder_pattern("{year}/*").fullmatch("2019")
+    assert not compile_folder_pattern("{year}/*").fullmatch("Import/x")
+    assert compile_folder_pattern("/Photos/**/").fullmatch("photos/a/b/c")
+    assert compile_folder_pattern("{year}-{month}?").fullmatch("2019-06a")
+    assert not compile_folder_pattern("{month}").fullmatch("13")
+    assert compile_folder_pattern("a.b").fullmatch("a.b")
+    assert not compile_folder_pattern("a.b").fullmatch("axb")
+    patterns = ["", "  /  ", "{year}/*"]
+    assert sorted_by_hand(P("2019/Mariage/Soirée"), patterns) == "{year}/*"  # sub-folders too
+    assert sorted_by_hand(P("2019"), patterns) is None
+    assert sorted_by_hand(P("."), patterns) is None
+
+
+def test_leave_sorted_and_library_duplicates(tmp_path: Path, config: Config) -> None:
+    src = tmp_path / "src"
+    kept = touch(src / "2019" / "Vacances" / "a.jpg", b"holiday photo")
+    touch(src / "2020" / "Mariage" / "Soirée" / "b.jpg", b"wedding")
+    touch(src / "Import" / "copy.jpg", b"holiday photo")  # same content as a kept photo
+    touch(src / "Import" / "same size.jpg", b"HOLIDAY PHOTO")  # same size, other content
+    touch(src / "loose.jpg", b"loose")
+    config.sort.templates["image"] = "{year}/{year}-{month}"
+    plan = planner(config).plan(SortOptions(src, src, leave_sorted=["{year}/*"]))
+    skipped = {str(p.relative_to(src)): r for p, r in plan.skipped}
+    assert skipped["2019/Vacances/a.jpg"] == "already sorted by hand (matches '{year}/*')"
+    assert "2020/Mariage/Soirée/b.jpg" in skipped
+    assert skipped["Import/copy.jpg"] == (
+        "duplicate of 2019/Vacances/a.jpg (already in your library)")
+    assert dests(plan, src) == {"Import/same size.jpg": "2019/2019-06/same size.jpg",
+                                "loose.jpg": "2019/2019-06/loose.jpg"}
+    assert kept.exists()

@@ -357,3 +357,18 @@ def test_signal_handler_interrupts_and_is_restored() -> None:
     before = signal.getsignal(signal.SIGTERM)
     run(["config", "--path"])
     assert signal.getsignal(signal.SIGTERM) is before
+
+
+def test_sort_templates_and_leave_sorted(tmp_path: Path) -> None:
+    src = tmp_path / "photos"
+    (src / "2019" / "Vacances").mkdir(parents=True)
+    (src / "2019" / "Vacances" / "IMG_20190712_101010.jpg").write_bytes(b"kept")
+    (src / "IMG_20210301_120000.jpg").write_bytes(b"new")
+    code, out = run(["sort", str(src), "--leave-sorted", "{year}/*", "--template",
+                     "image={year}/{year}-{month}", "--no-mtime", "-y"])
+    assert code == 0 and "already sorted by hand" in out.text
+    assert (src / "2021" / "2021-03" / "IMG_20210301_120000.jpg").exists()
+    assert (src / "2019" / "Vacances" / "IMG_20190712_101010.jpg").exists()
+    for bad in ("image", "cars={year}"):
+        code, out = run(["sort", str(src), "--template", bad])
+        assert code == 2 and "--template expects CATEGORY=TEMPLATE" in out.text
