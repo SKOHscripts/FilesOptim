@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
-import tempfile
+import threading
 import time
 from collections import Counter
 from collections.abc import Iterable, Sequence
@@ -14,11 +14,17 @@ from pathlib import Path
 
 from filesoptim.config import Config, work_cache_dir
 from filesoptim.fsutils import (
+    STALE_AFTER,
+    TEMP_MARK,
     WalkOptions,
     display_path,
+    free_space,
     install_file,
     iter_files,
+    make_run_dir,
+    stale_run_dirs,
     stat_key,
+    tree_bytes,
     unique_path,
 )
 from filesoptim.optimize.base import Estimate, Optimizer, Outcome
@@ -116,7 +122,11 @@ class Engine:
         rejected: list[Estimate] = []
         now = time.time()
         min_age = self.config.general.min_age_seconds
-        for path, st in iter_files(roots, self.walk):
+        for path, st in iter_files(roots, self.walk, include_temp=True):
+            if TEMP_MARK in path.name:
+                if now - st.st_mtime > STALE_AFTER:  # left behind by a killed run
+                    self._remove_leftover(path)
+                continue
             optimizer = next((o for o in optimizers if o.accepts(path)), None)
             if optimizer is None:
                 continue
@@ -137,12 +147,49 @@ class Engine:
                 candidates.append(Candidate(path, st, optimizer))
         return candidates, rejected
 
+    # -- disk space -------------------------------------------------------------------------
+    @property
+    def reserve(self) -> int:
+        """Free space (bytes) that must always remain on the disks FilesOptim writes to."""
+        return self.config.optimize.min_free_mb * 1024 * 1024
+
+    def has_room(self, folder: Path, needed: int) -> bool:
+        return free_space(folder) - needed >= self.reserve
+
+    def _no_room(self, est: Estimate) -> Estimate:
+        return est.skip(f"not enough free disk space (keeping {human_size(self.reserve)} free)",
+                        remember=False)
+
+    def _remove_leftover(self, path: Path) -> None:
+        try:
+            size = tree_bytes(path)
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        except OSError as exc:
+            self.console.warn(f"cannot remove leftover {path}: {exc}")
+            return
+        self.console.info(f"Removed a leftover of an interrupted run: {path} "
+                          f"({human_size(size)})")
+
+    def cleanup_leftovers(self, cache: Path) -> None:
+        """Delete work folders of runs that were killed before they could clean up."""
+        for folder in stale_run_dirs(cache, time.time()):
+            self._remove_leftover(folder)
+
     # -- estimation -------------------------------------------------------------------------
-    def _safe_estimate(self, candidate: Candidate, workdir: Path) -> Estimate:
+    def _safe_estimate(
+        self, candidate: Candidate, workdir: Path, stop: threading.Event | None = None
+    ) -> Estimate:
+        est = candidate.optimizer.new_estimate(candidate.path, candidate.stat)
+        if stop is not None and stop.is_set():
+            return est.skip("interrupted", remember=False)
+        if not self.has_room(workdir, candidate.stat.st_size):
+            return self._no_room(est)
         try:
             return candidate.optimizer.estimate(candidate.path, candidate.stat, workdir)
         except (OSError, ToolError, ValueError) as exc:
-            est = candidate.optimizer.new_estimate(candidate.path, candidate.stat)
             return est.skip(f"error ({exc})", remember=False)
 
     def estimate(self, candidates: Sequence[Candidate], workdir: Path) -> list[Estimate]:
@@ -156,7 +203,7 @@ class Engine:
             nonlocal used
             if est.staged is not None:
                 size = est.staged.stat().st_size
-                if used + size > budget:
+                if used + size > budget or not self.has_room(workdir, 0):
                     est.discard()  # recomputed at apply time
                 else:
                     used += size
@@ -165,13 +212,22 @@ class Engine:
         quick = [c for c in candidates if c.optimizer.name != "video"]
         slow = [c for c in candidates if c.optimizer.name == "video"]
         jobs = self.config.optimize.jobs or os.cpu_count() or 1
-        with ThreadPoolExecutor(max_workers=jobs) as pool:
+        stop = threading.Event()
+        pool = ThreadPoolExecutor(max_workers=jobs)
+        try:
             futures: dict[Future[Estimate], Candidate] = {
-                pool.submit(self._safe_estimate, c, workdir): c for c in quick
+                pool.submit(self._safe_estimate, c, workdir, stop): c for c in quick
             }
             for done, future in enumerate(as_completed(futures), start=1):
                 self.console.progress(done, total, f"estimating {futures[future].path.name}")
                 keep_or_drop(future.result())
+        except BaseException:
+            # Ctrl+C (or any error): nothing queued may start, running tools are stopped.
+            stop.set()
+            self.tools.terminate_all()
+            raise
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
         for offset, candidate in enumerate(slow, start=len(quick) + 1):
             label = f"estimating {candidate.path.name}"
             self._attach_progress(candidate.optimizer, offset, total, label)
@@ -260,11 +316,17 @@ class Engine:
                 est.discard()
                 est = optimizer.estimate(path, st, workdir)
             if est.candidate and est.staged is None:
+                if not self.has_room(path.parent, est.original_size):
+                    return self._skipped(self._no_room(est))
                 est = optimizer.materialize(est, workdir)
+            elif est.staged is not None and est.staged.stat().st_dev != st.st_dev:
+                # the result will be copied next to the original before replacing it
+                if not self.has_room(path.parent, est.staged.stat().st_size):
+                    est.discard()
+                    return self._skipped(self._no_room(est))
             if not est.candidate or est.staged is None:
                 self._remember(est, optimizer)
-                return Outcome(path, est.kind, "skipped", est.original_size, est.original_size,
-                               est.skip_reason or "")
+                return self._skipped(est)
             self._keep_original(optimizer, path)
             final = install_file(est.staged, path, est.target)
         except (OSError, ToolError) as exc:
@@ -277,6 +339,11 @@ class Engine:
             self.state.forget(path)
         return Outcome(path, est.kind, "optimized", est.original_size, new_stat.st_size,
                        final_path=final)
+
+    @staticmethod
+    def _skipped(est: Estimate) -> Outcome:
+        return Outcome(est.path, est.kind, "skipped", est.original_size, est.original_size,
+                       est.skip_reason or "")
 
     def _remember(self, est: Estimate, optimizer: Optimizer) -> None:
         if est.remember and est.skip_reason:
@@ -341,8 +408,8 @@ class Engine:
                 self.console.warn("ffmpeg has no libvmaf: video quality is measured with SSIM.")
         base = roots[0] if len(roots) == 1 and roots[0].is_dir() else None
         cache = work_cache_dir()
-        cache.mkdir(parents=True, exist_ok=True)
-        workdir = Path(tempfile.mkdtemp(prefix="run-", dir=cache))
+        self.cleanup_leftovers(cache)
+        workdir = make_run_dir(cache)
         try:
             candidates, rejected = self.discover(roots, optimizers)
             estimates = rejected + self.estimate(candidates, workdir)

@@ -80,6 +80,7 @@ class OptimizeConfig:
     keep_originals: str = "auto"
     backup_dir: str = ""
     staging_limit_mb: int = 1024
+    min_free_mb: int = 2048
     jpeg_progressive: bool = False
 
 
@@ -256,6 +257,8 @@ def validate(config: Config) -> Config:
     for part in (config.optimize, config.video):
         if not 0 <= part.min_saving_percent < 100:
             raise ConfigError("'min_saving_percent' must be in [0, 100[")
+    if config.optimize.min_free_mb < 0 or config.optimize.staging_limit_mb < 0:
+        raise ConfigError("'min_free_mb' and 'staging_limit_mb' must be >= 0")
     if config.optimize.keep_originals == "backup" and not config.optimize.backup_dir:
         raise ConfigError("'optimize.keep_originals = \"backup\"' needs 'optimize.backup_dir'")
     return config
@@ -334,6 +337,7 @@ jobs = 0                    # parallel workers for images/PDF (0 = number of CPU
 keep_originals = "auto"     # auto (trash for lossy types) | never | trash | backup
 backup_dir = ""             # used when keep_originals = "backup"
 staging_limit_mb = 1024     # disk budget to keep estimation results for instant apply
+min_free_mb = 2048          # never let a disk used by FilesOptim go below this free space
 jpeg_progressive = false    # lossless conversion to progressive JPEG (usually smaller)
 
 [video]

@@ -66,3 +66,50 @@ def test_package_manager_detection_and_hints() -> None:
         "sudo apt install ffmpeg libimage-exiftool-perl"
     )
     assert install_hint(["gs"], FakeTools(["pacman"])) == "sudo pacman -S ghostscript"
+
+
+def test_run_interrupted_kills_the_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    tools = Tools()
+    real = subprocess.Popen.communicate
+    calls: list[int] = []
+
+    def communicate(self: subprocess.Popen[str], *args: object, **kwargs: object) -> object:
+        calls.append(1)
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+        return real(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(subprocess.Popen, "communicate", communicate)
+    with pytest.raises(KeyboardInterrupt):
+        tools.run([PY, "-c", "import time; time.sleep(30)"])
+    assert tools._running == set()
+
+
+def test_terminate_all_stops_running_tools() -> None:
+    import threading
+    import time
+
+    tools = Tools()
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            tools.run([PY, "-c", "import time; time.sleep(30)"])
+        except ToolError as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=worker)
+    started = time.time()
+    thread.start()
+    while not tools._running:
+        time.sleep(0.01)
+    tools.terminate_all()
+    thread.join(10)
+    assert time.time() - started < 10 and errors  # killed: non-zero exit code
+
+    class Gone:
+        def terminate(self) -> None:
+            raise ProcessLookupError
+
+    tools._running.add(Gone())  # type: ignore[arg-type]
+    tools.terminate_all()  # already finished children are ignored

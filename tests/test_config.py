@@ -126,3 +126,8 @@ def test_validate_returns_config() -> None:
 
 def test_tomllib_is_used() -> None:
     assert cfgmod.tomllib is (sys.modules.get("tomllib") or sys.modules.get("tomli"))
+
+
+def test_negative_disk_settings(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="min_free_mb"):
+        load_config(write(tmp_path, "[optimize]\nmin_free_mb = -1\n"))

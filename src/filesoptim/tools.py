@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import shutil
 import subprocess
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,6 +98,8 @@ class Tools:
     def __init__(self, path: str | None = None) -> None:
         self.path = path
         self._cache: dict[str, str | None] = {}
+        self._running: set[subprocess.Popen[str]] = set()
+        self._lock = threading.Lock()
 
     def which(self, name: str) -> str | None:
         if name not in self._cache:
@@ -123,23 +127,41 @@ class Tools:
         """Run a program and capture its text output."""
         argv = self._resolve(args)
         log.debug("run: %s", " ".join(argv))
+        child = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            errors="replace",
+        )
+        with self._lock:
+            self._running.add(child)
         try:
-            proc = subprocess.run(
-                argv,
-                capture_output=True,
-                text=True,
-                errors="replace",
-                timeout=timeout,
-                check=False,
-                stdin=subprocess.DEVNULL,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise ToolError(f"{Path(argv[0]).name} timed out") from exc
+            stdout, stderr = child.communicate(timeout=timeout)
+        except BaseException as exc:
+            child.kill()
+            child.communicate()
+            if isinstance(exc, subprocess.TimeoutExpired):
+                raise ToolError(f"{Path(argv[0]).name} timed out") from exc
+            raise
+        finally:
+            with self._lock:
+                self._running.discard(child)
+        proc = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
         if check and proc.returncode != 0:
             detail = (proc.stderr or proc.stdout).strip().splitlines()
             last = detail[-1] if detail else f"exit code {proc.returncode}"
             raise ToolError(f"{Path(argv[0]).name} failed: {last}")
         return proc
+
+    def terminate_all(self) -> None:
+        """Stop every program started by :meth:`run` (used when the user interrupts)."""
+        with self._lock:
+            children = list(self._running)
+        for child in children:
+            with contextlib.suppress(OSError):
+                child.terminate()
 
     def popen(self, args: Sequence[str | Path], *, stderr: IO[Any]) -> subprocess.Popen[str]:
         """Start a program whose text stdout is streamed (used for ffmpeg progress)."""

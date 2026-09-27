@@ -26,7 +26,9 @@ class StateDB:
     def __init__(self, path: Path | None) -> None:
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(":memory:" if path is None else str(path))
+        # Only one thread uses it at a time, but it may be finalised from another one.
+        self._conn = sqlite3.connect(":memory:" if path is None else str(path),
+                                     check_same_thread=False)
         self._conn.execute(SCHEMA)
         # Closed even if the owner forgets to (e.g. after an exception).
         self._finalizer = weakref.finalize(self, self._conn.close)

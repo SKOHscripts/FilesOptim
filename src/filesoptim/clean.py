@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from filesoptim.config import CleanConfig, ConfigError, cache_home, data_home, work_cache_dir
-from filesoptim.fsutils import allocated_size, is_within
+from filesoptim.fsutils import allocated_size, is_within, stale_run_dirs
 from filesoptim.trash import list_trash
 from filesoptim.ui import Console, human_size
 
@@ -234,8 +234,19 @@ def _collect_journal(ctx: CleanContext, roots: list[Path]) -> list[CleanItem]:
     return items
 
 
+def _collect_leftovers(ctx: CleanContext, roots: list[Path]) -> list[CleanItem]:
+    items = []
+    for root in roots:
+        for folder in stale_run_dirs(root, ctx.now):
+            size, count = tree_size(folder)
+            items.append(CleanItem(folder, size, count, is_dir=True))
+    return items
+
+
 def default_targets() -> list[CleanTarget]:
     return [
+        CleanTarget("filesoptim", "work folders left by interrupted FilesOptim runs",
+                    lambda c: [c.cache / "filesoptim"], _collect_leftovers, prune=False),
         CleanTarget("thumbnails", "file manager thumbnails",
                     lambda c: [c.cache / "thumbnails", c.home / ".thumbnails"],
                     _collect_age(lambda cfg: cfg.thumbnail_max_age_days)),

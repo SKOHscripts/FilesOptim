@@ -347,3 +347,13 @@ def test_doctor_and_config(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     custom.write_text("[video]\ncodec = 'av1'\n")
     code, _ = run(["config", "--config", str(custom)])
     assert 'codec = "av1"' in capsys.readouterr().out
+
+
+def test_signal_handler_interrupts_and_is_restored() -> None:
+    import signal
+
+    with pytest.raises(KeyboardInterrupt):
+        cli._interrupt(signal.SIGTERM, None)
+    before = signal.getsignal(signal.SIGTERM)
+    run(["config", "--path"])
+    assert signal.getsignal(signal.SIGTERM) is before

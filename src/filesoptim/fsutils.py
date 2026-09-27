@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import stat
+import tempfile
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
@@ -43,9 +44,9 @@ class WalkOptions:
             one_file_system=general.one_file_system,
         )
 
-    def is_excluded(self, name: str) -> bool:
+    def is_excluded(self, name: str, *, include_temp: bool = False) -> bool:
         if TEMP_MARK in name:
-            return True
+            return not include_temp  # our temporary files are hidden: never skip them then
         if self.skip_hidden and name.startswith("."):
             return True
         return any(fnmatch(name, pattern) for pattern in self.exclude)
@@ -56,10 +57,12 @@ def iter_tree(
     options: WalkOptions,
     *,
     skip_dirs: Iterable[Path] = (),
+    include_temp: bool = False,
 ) -> Iterator[tuple[Path, os.stat_result]]:
     """Yield ``(path, lstat)`` for every entry (files, dirs, links...) below the roots.
 
     Directories are yielded before their content; excluded names are not yielded nor visited.
+    FilesOptim's own temporary files are skipped unless ``include_temp`` is true.
     """
     skipped = {p.absolute() for p in skip_dirs}
     for root in roots:
@@ -80,7 +83,7 @@ def iter_tree(
                 continue
             subdirs: list[Path] = []
             for entry in entries:
-                if options.is_excluded(entry.name):
+                if options.is_excluded(entry.name, include_temp=include_temp):
                     continue
                 try:
                     entry_stat = entry.stat(follow_symlinks=False)
@@ -102,9 +105,10 @@ def iter_files(
     options: WalkOptions,
     *,
     skip_dirs: Iterable[Path] = (),
+    include_temp: bool = False,
 ) -> Iterator[tuple[Path, os.stat_result]]:
     """Yield regular files only (never symlinks) with their ``lstat``."""
-    for path, st in iter_tree(roots, options, skip_dirs=skip_dirs):
+    for path, st in iter_tree(roots, options, skip_dirs=skip_dirs, include_temp=include_temp):
         if stat.S_ISREG(st.st_mode):
             yield path, st
 
@@ -218,3 +222,55 @@ def prune_empty_dirs(start: Path, stop: Path) -> list[Path]:
 
 def free_space(path: Path) -> int:
     return shutil.disk_usage(path).free
+
+
+# ------------------------------------------------------------------------------------------
+# Work folders of optimisation runs: "run-<pid>-<random>" in the cache
+# ------------------------------------------------------------------------------------------
+RUN_PREFIX = "run-"
+STALE_AFTER = 3600  # seconds, for leftovers whose owner cannot be identified
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # exists, owned by someone else
+        return True
+    return True
+
+
+def make_run_dir(cache: Path) -> Path:
+    cache.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=f"{RUN_PREFIX}{os.getpid()}-", dir=cache))
+
+
+def stale_run_dirs(cache: Path, now: float) -> list[Path]:
+    """Work folders left by runs that were killed (their process no longer exists)."""
+    if not cache.is_dir():
+        return []
+    stale = []
+    for folder in sorted(cache.iterdir()):
+        if not folder.name.startswith(RUN_PREFIX) or not folder.is_dir():
+            continue
+        owner = folder.name[len(RUN_PREFIX):].split("-", 1)[0]
+        if owner.isdigit() and "-" in folder.name[len(RUN_PREFIX):]:
+            dead = not pid_alive(int(owner))
+        else:  # older naming without the process id
+            dead = now - folder.stat().st_mtime > STALE_AFTER
+        if dead:
+            stale.append(folder)
+    return stale
+
+
+def tree_bytes(path: Path) -> int:
+    """Allocated size of a folder tree (or a file)."""
+    st = path.lstat()
+    total = allocated_size(st)
+    if stat.S_ISDIR(st.st_mode):
+        for dirpath, _, filenames in os.walk(path):
+            for name in filenames:
+                with contextlib.suppress(OSError):
+                    total += allocated_size((Path(dirpath) / name).lstat())
+    return total

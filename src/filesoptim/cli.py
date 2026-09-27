@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import os
+import signal
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -503,8 +504,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _interrupt(signum: int, frame: object) -> None:
+    raise KeyboardInterrupt
+
+
 def main(argv: Sequence[str] | None = None, *, tools: Tools | None = None,
          console: Console | None = None) -> int:
+    # Closing the terminal (SIGHUP) or `kill` (SIGTERM) stop cleanly, like Ctrl+C: temporary
+    # files are removed and running tools are stopped.
+    previous = {sig: signal.signal(sig, _interrupt) for sig in (signal.SIGTERM, signal.SIGHUP)}
+    try:
+        return _main(argv, tools=tools, console=console)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def _main(argv: Sequence[str] | None, *, tools: Tools | None, console: Console | None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "handler", None):
@@ -524,8 +540,8 @@ def main(argv: Sequence[str] | None = None, *, tools: Tools | None = None,
         console.error(str(exc))
         return 2
     except KeyboardInterrupt:
-        console.error("Interrupted. Originals are only ever replaced atomically: "
-                      "no file was left half-written.")
+        console.error("Interrupted: work stopped and temporary files removed. Originals are "
+                      "only ever replaced atomically: no file was left half-written.")
         return 130
     except BrokenPipeError:  # e.g. piped into `head`
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())

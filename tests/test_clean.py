@@ -200,7 +200,7 @@ def test_permission_errors(ctx: CleanContext, monkeypatch: pytest.MonkeyPatch) -
 
 def test_select_and_notes(ctx: CleanContext) -> None:
     c = cleaner(ctx)
-    assert [t.key for t in c.select([], False)] == ["thumbnails", "trash", "cache"]
+    assert [t.key for t in c.select([], False)] == ["filesoptim", "thumbnails", "trash", "cache"]
     assert "journal" in [t.key for t in c.select([], True)]
     with pytest.raises(ConfigError, match="unknown clean target"):
         c.select(["nope"], False)
@@ -260,8 +260,9 @@ def test_run_flow(ctx: CleanContext) -> None:
     touch(ctx.cache / "app" / "old2.dat", 200)
     noisy = Out()
     c = cleaner(ctx, noisy)
-    c.targets[2].roots = lambda context: [context.data]  # items end up "outside" the roots
-    c.targets[2].collect = lambda context, roots: [CleanItem(context.cache / "app" / "old2.dat",
+    cache_target = next(t for t in c.targets if t.key == "cache")
+    cache_target.roots = lambda context: [context.data]  # items end up "outside" the roots
+    cache_target.collect = lambda context, roots: [CleanItem(context.cache / "app" / "old2.dat",
                                                              1)]
     c.run(["cache"], system=False, assume_yes=True, dry_run=False)
     assert "✘" in noisy.text
@@ -271,3 +272,16 @@ def test_default_context(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(clean_mod.os, "geteuid", lambda: 0)
     c = Cleaner(CleanConfig(), Out())
     assert c.is_root and c.context.home == Path.home()
+
+
+def test_leftover_work_folders(ctx: CleanContext, monkeypatch: pytest.MonkeyPatch) -> None:
+    work = ctx.cache / "filesoptim"
+    touch(work / "run-999999-abc" / "staged.jpg")
+    touch(work / f"run-{os.getpid()}-live" / "staged.jpg")
+    monkeypatch.setattr(clean_mod, "stale_run_dirs",
+                        lambda root, now: [work / "run-999999-abc"] if root == work else [])
+    estimate = estimate_of(ctx, "filesoptim")
+    assert [(i.path.name, i.files, i.is_dir) for i in estimate.items] == [
+        ("run-999999-abc", 1, True)]
+    cleaner(ctx).apply([estimate])
+    assert sorted(p.name for p in work.iterdir()) == [f"run-{os.getpid()}-live"]

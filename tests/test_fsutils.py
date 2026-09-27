@@ -226,3 +226,48 @@ def test_prune_empty_dirs(tmp_path: Path) -> None:
     empty_root.mkdir()
     assert prune_empty_dirs(empty_root, empty_root) == []
     assert prune_empty_dirs(tmp_path / "elsewhere", tmp_path / "root") == []
+
+
+def test_run_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+    import sys
+    import time
+
+    from filesoptim.fsutils import make_run_dir, pid_alive, stale_run_dirs, tree_bytes
+
+    assert pid_alive(os.getpid())
+    finished = subprocess.Popen([sys.executable, "-c", "pass"])
+    finished.wait()
+    assert not pid_alive(finished.pid)
+    cache = tmp_path / "cache"
+    assert stale_run_dirs(cache, time.time()) == []
+    mine = make_run_dir(cache)
+    assert mine.name.startswith(f"run-{os.getpid()}-")
+    dead = cache / f"run-{finished.pid}-abc"
+    dead.mkdir()
+    touch(dead / "x.jpg", b"1" * 10_000)
+    old_style = cache / "run-abcdef"
+    old_style.mkdir()
+    os.utime(old_style, (0, 0))
+    recent_old_style = cache / "run-zzz"
+    recent_old_style.mkdir()
+    (cache / "run-file").write_text("not a folder")
+    (cache / "other").mkdir()
+    assert stale_run_dirs(cache, time.time()) == [dead, old_style]
+    assert tree_bytes(dead) >= 10_000
+    assert tree_bytes(dead / "x.jpg") >= 10_000
+
+    def denied(pid: int, sig: int) -> None:
+        raise PermissionError
+
+    monkeypatch.setattr(fsutils.os, "kill", denied)
+    assert pid_alive(1)
+    real_lstat = Path.lstat
+
+    def flaky(self: Path) -> os.stat_result:
+        if self.name == "x.jpg":
+            raise FileNotFoundError(self)
+        return real_lstat(self)
+
+    monkeypatch.setattr(Path, "lstat", flaky)
+    assert tree_bytes(dead) < 10_000  # vanished files are ignored

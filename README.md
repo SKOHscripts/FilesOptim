@@ -45,7 +45,9 @@
   - fichiers dont l'extension ne correspond pas au contenu ;
   - fichiers cachés, `.git`, `node_modules`… ;
   - les autres systèmes de fichiers montés ne sont pas parcourus.
-- Si l'espace disque libre ne suffit pas pour un réencodage vidéo en toute sécurité, le fichier est ignoré.
+- **Espace disque protégé** : FilesOptim ne descend jamais sous **2 Gio d'espace libre** (`min_free_mb`) sur les disques où il écrit. L'estimation garde au plus 1 Gio de résultats d'essai (`staging_limit_mb`), puis recalcule le reste au moment d'appliquer. Un fichier qui ne tiendrait pas est ignoré (« not enough free disk space »).
+- **Ctrl+C arrête tout immédiatement** : les fichiers en attente ne démarrent pas, les outils en cours (jpegoptim, qpdf, ffmpeg…) sont stoppés, et les fichiers temporaires sont supprimés. Fermer le terminal (SIGHUP) ou `kill` (SIGTERM) fait de même.
+- **Restes d'exécutions tuées** (`kill -9`, coupure de courant) : ils sont supprimés automatiquement au lancement suivant, et `filesoptim clean` les montre (cible `filesoptim`).
 
 ## Installation
 
