@@ -35,8 +35,20 @@
 - Une base d'état mémorise chaque fichier traité, par taille, date de modification et réglages : il n'est pas retraité à chaque passage (`--force` pour ignorer cette mémoire).
 - Seuils de gain minimum : 1 % et 2 Kio sans perte, 20 % pour la vidéo, 10 % pour les modes PDF avec perte.
 
+**Aucune perte de données, même en cas d'arrêt brutal** (Ctrl+C, `kill -9`, fermeture du terminal, coupure de courant)
+- **Remplacement** : un fichier n'est jamais réécrit sur place. La nouvelle version est écrite à côté sous un nom temporaire, forcée sur le disque (`fsync`), puis substituée à l'original en une seule opération atomique. À tout instant, l'original complet ou la nouvelle version complète existe.
+- **Modification pendant le traitement** : juste avant de remplacer, FilesOptim vérifie que l'original n'a pas changé depuis l'estimation. Une retouche faite entre-temps n'est jamais écrasée.
+- **Déplacements** (tri, annulation, corbeille) :
+  - sur le même disque, le fichier est d'abord créé sous son nouveau nom (lien physique), puis l'ancien nom est retiré ; au pire, il existe deux noms pour les mêmes données ;
+  - vers un autre disque, la copie est écrite en entier et forcée sur le disque avant que la source soit effacée ;
+  - rien n'est jamais écrasé.
+- **Métadonnées** : exiftool écrit un nouveau fichier complet, qui remplace l'original de la même façon atomique. Les pixels ne sont jamais touchés.
+- **Journal du tri** : chaque étape est écrite sur le disque *avant* d'être exécutée. `filesoptim undo` peut donc tout annuler, même après une interruption, et on peut le relancer s'il est lui-même interrompu.
+- **Corbeille** : un fichier situé sur un autre disque va dans la corbeille de ce disque (`.Trash-UID`, comme le gestionnaire de fichiers). Aucune copie n'atterrit sur la partition système.
+- **Tests de crash** : les tests tuent de vrais processus (`kill -9`) en plein tri, en pleine annulation et en pleine optimisation. Ils vérifient ensuite que chaque fichier d'origine existe toujours, identique octet pour octet (ou pixel pour pixel), et qu'aucun nom définitif ne contient une copie partielle.
+
 **Remplacement sûr**
-- L'original n'est remplacé qu'à la fin, de façon **atomique**, en conservant ses permissions, son propriétaire et ses dates. Une interruption (Ctrl+C) ne laisse jamais de fichier à moitié écrit.
+- Les permissions, le propriétaire et les dates de l'original sont conservés.
 - Pour les traitements avec perte (vidéo), l'original part par défaut **dans la corbeille** (`--keep-originals trash|backup|never`).
 - Les fichiers ignorés d'office :
   - fichiers modifiés il y a moins de 60 s (peut-être encore en cours d'écriture) ;

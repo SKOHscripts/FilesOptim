@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -51,10 +52,11 @@ def test_send_to_trash_failure_removes_info(tmp_path: Path,
     def broken(*args: Any) -> None:
         raise OSError("boom")
 
-    monkeypatch.setattr(shutil, "move", broken)
+    monkeypatch.setattr(trash, "safe_move", broken)
     with pytest.raises(OSError):
         send_to_trash(item)
     assert not list((trash_root() / "info").iterdir())
+    assert item.read_bytes() == b"1"
 
 
 def test_partial_copies_are_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,24 +79,85 @@ def test_partial_copies_are_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert item.read_bytes() == b"video"
     assert not list((trash_root() / "files").iterdir())
 
-    def partial_tree(src: Any, dst: Any) -> None:
-        (Path(dst) / "sub").mkdir(parents=True)
-        raise OSError("No space left on device")
+    real_rename = Path.rename
 
-    monkeypatch.setattr(shutil, "move", partial_tree)
+    def partial_tree(self: Path, target: Any) -> Any:
+        if self == folder:
+            (Path(target) / "sub").mkdir(parents=True)
+            raise OSError("No space left on device")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", partial_tree)
     with pytest.raises(OSError):
         send_to_trash(folder)
     assert folder.is_dir() and not list((trash_root() / "files").iterdir())
+    monkeypatch.undo()
 
-    def moved_then_failed(src: Any, dst: Any) -> None:
-        Path(src).rename(dst)
-        raise OSError("could not remove the source")
+    def moved_then_failed(src: Path, dst: Path) -> None:
+        src.rename(dst)
+        raise OSError("could not sync the folder")
 
-    monkeypatch.setattr(shutil, "move", moved_then_failed)
+    monkeypatch.setattr(trash, "safe_move", moved_then_failed)
     with pytest.raises(OSError):
         send_to_trash(item)
     # the original is gone: its only copy (in the trash) must never be deleted
     assert (trash_root() / "files" / "big.mkv").read_bytes() == b"video"
+
+
+def test_folders_are_renamed_into_the_trash(tmp_path: Path) -> None:
+    folder = tmp_path / "album"
+    (folder / "sub").mkdir(parents=True)
+    (folder / "sub" / "a.txt").write_text("x")
+    trashed = send_to_trash(folder)
+    assert (trashed / "sub" / "a.txt").read_text() == "x" and not folder.exists()
+
+
+def test_other_disks_use_their_own_trash(tmp_path: Path,
+                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    disk = tmp_path / "disk"
+    photo = disk / "photos" / "a.jpg"
+    photo.parent.mkdir(parents=True)
+    photo.write_bytes(b"photo")
+    home_dev = trash._existing(trash_root()).stat().st_dev
+    real_lstat = Path.lstat
+
+    def lstat(self: Path) -> os.stat_result:
+        st = real_lstat(self)
+        if self == photo:
+            values = list(st)
+            values[2] = home_dev + 1  # pretend the photo lives on another disk
+            return os.stat_result(values)
+        return st
+
+    monkeypatch.setattr(Path, "lstat", lstat)
+    monkeypatch.setattr(trash.os.path, "ismount", lambda p: Path(p) in (disk, Path("/")))
+    root, top = trash.trash_for(photo)
+    assert (root, top) == (disk / f".Trash-{os.getuid()}", disk)
+    trashed = send_to_trash(photo)
+    assert trashed == root / "files" / "a.jpg" and trashed.read_bytes() == b"photo"
+    info = (root / "info" / "a.jpg.trashinfo").read_text()
+    assert "Path=photos/a.jpg" in info  # relative to the disk, as the spec requires
+
+
+def test_unwritable_disk_trash_falls_back_safely(tmp_path: Path,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    photo = tmp_path / "a.jpg"
+    photo.write_bytes(b"photo")
+    monkeypatch.setattr(trash, "trash_for", lambda p: (tmp_path / "ro" / ".Trash-0", tmp_path))
+    real_mkdir = Path.mkdir
+
+    def mkdir(self: Path, *args: Any, **kwargs: Any) -> None:
+        if "ro" in self.parts:
+            raise PermissionError("read-only")
+        real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    monkeypatch.setattr(trash, "free_space", lambda p: 10)
+    with pytest.raises(OSError, match="not enough space"):
+        send_to_trash(photo)
+    assert photo.exists()
+    monkeypatch.setattr(trash, "free_space", lambda p: 10**15)
+    assert send_to_trash(photo) == trash_root() / "files" / "a.jpg"
 
 
 def test_reserved_name_race(tmp_path: Path) -> None:

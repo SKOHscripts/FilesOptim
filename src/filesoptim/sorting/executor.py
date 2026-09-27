@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import shutil
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -13,7 +12,15 @@ from pathlib import Path
 from typing import IO, Any
 
 from filesoptim.config import state_dir
-from filesoptim.fsutils import display_path, prune_empty_dirs
+from filesoptim.fsutils import (
+    TEMP_MARK,
+    display_path,
+    durable_copy,
+    fsync_dir,
+    prune_empty_dirs,
+    rename_no_clobber,
+    safe_move,
+)
 from filesoptim.sorting.metadata import revert_metadata, write_metadata
 from filesoptim.sorting.planner import SortOp, SortPlan
 from filesoptim.tools import ToolError, Tools
@@ -28,7 +35,11 @@ def journal_dir() -> Path:
 
 
 class Journal:
-    """Append-only JSON-lines log, flushed after every operation (survives crashes)."""
+    """Append-only JSON-lines log, written to the disk before every operation.
+
+    Each step is recorded *before* it is performed, so whatever the moment of an interruption
+    (Ctrl+C, kill, power cut), the journal knows everything that may have been done.
+    """
 
     def __init__(self, path: Path, header: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -39,6 +50,7 @@ class Journal:
     def add(self, entry: dict[str, Any]) -> None:
         self._fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
         self._fh.flush()
+        os.fsync(self._fh.fileno())
 
     def close(self) -> None:
         self._fh.close()
@@ -73,13 +85,13 @@ class SortExecutor:
 
     def _change_in_place(self, op: SortOp, path: Path, journal: Journal) -> None:
         if op.changes_metadata:
-            write_metadata(self.tools, path, op.category, op.set_date, op.add_keywords)
             journal.add({"type": "meta", "path": str(path), "category": op.category,
                          "set_date": op.set_date is not None, "keywords": op.add_keywords})
+            write_metadata(self.tools, path, op.category, op.set_date, op.add_keywords)
         if op.set_mtime is not None:
             st = path.stat()
-            os.utime(path, (st.st_atime, op.set_mtime))
             journal.add({"type": "mtime", "path": str(path), "old": [st.st_atime, st.st_mtime]})
+            os.utime(path, (st.st_atime, op.set_mtime))
 
     def _run(self, op: SortOp, journal: Journal) -> None:
         if op.action == "keep":
@@ -89,16 +101,23 @@ class SortExecutor:
             raise FileExistsError(f"{op.destination} appeared in the meantime")
         self._ensure_dir(op.destination.parent, journal)
         if op.action == "copy":
-            shutil.copy2(op.source, op.destination)
             journal.add({"type": "copy", "src": str(op.source), "dst": str(op.destination)})
+            tmp = op.destination.with_name(f".{op.destination.name}{TEMP_MARK}")
+            durable_copy(op.source, tmp)
+            try:
+                rename_no_clobber(tmp, op.destination)
+            except BaseException:
+                tmp.unlink(missing_ok=True)
+                raise
+            fsync_dir(op.destination.parent)
             self._change_in_place(op, op.destination, journal)
             st = op.destination.stat()
             journal.add({"type": "copied", "path": str(op.destination),
                          "size": st.st_size, "mtime_ns": st.st_mtime_ns})
         else:
             self._change_in_place(op, op.source, journal)
-            shutil.move(op.source, op.destination)
             journal.add({"type": "move", "src": str(op.source), "dst": str(op.destination)})
+            safe_move(op.source, op.destination)
 
     def execute(self, plan: SortPlan) -> ExecutionResult:
         options = plan.options
@@ -188,7 +207,9 @@ def plan_undo(entries: list[dict[str, Any]], base: Path | None = None) -> list[U
         if kind == "move":
             src, dst = Path(entry["src"]), Path(entry["dst"])
             blocked = ""
-            if not dst.exists():
+            if not dst.exists() and src.exists():
+                blocked = "was not moved (interrupted before): nothing to undo"
+            elif not dst.exists():
                 blocked = "file no longer at its sorted location"
             elif src.exists() or src.is_symlink():
                 blocked = "original location is occupied"
@@ -220,7 +241,7 @@ def _apply_undo(step: UndoStep, tools: Tools) -> None:
     kind = entry["type"]
     if kind == "move":
         Path(entry["src"]).parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(entry["dst"], entry["src"])
+        safe_move(Path(entry["dst"]), Path(entry["src"]))
     elif kind == "copy":
         Path(entry["dst"]).unlink()
     elif kind == "mkdir":

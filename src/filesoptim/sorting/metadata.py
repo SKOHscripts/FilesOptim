@@ -15,6 +15,7 @@ import mutagen
 from PIL import Image
 
 from filesoptim.categories import category_of, extension
+from filesoptim.fsutils import TEMP_MARK, install_file, stat_key
 from filesoptim.tools import ToolError, Tools
 
 MIN_YEAR = 1970
@@ -249,25 +250,45 @@ def _date_args(category: str, stamp: str) -> list[str]:
     return [f"-{tag}={stamp}" for tag in tags]
 
 
+def _rewrite(tools: Tools, path: Path, edits: list[str]) -> None:
+    """Apply exiftool ``edits`` without ever rewriting ``path`` in place.
+
+    exiftool writes a complete new file next to it (``-o``); that file is flushed to the disk
+    and swapped in atomically, and only if the original did not change in the meantime.
+    """
+    before = stat_key(path.stat())
+    output = path.with_name(f".{path.stem}{TEMP_MARK}{path.suffix}")
+    output.unlink(missing_ok=True)  # leftover of an interrupted run
+    try:
+        tools.run(["exiftool", "-q", "-q", "-api", "QuickTimeUTC", *edits,
+                   "-o", str(output), str(path)])
+        if not output.is_file():
+            raise ToolError(f"exiftool did not write {path.name}")
+        install_file(output, path, expected=before)
+    except BaseException:
+        output.unlink(missing_ok=True)
+        raise
+
+
 def write_metadata(
     tools: Tools, path: Path, category: str, set_date: datetime | None, keywords: Sequence[str]
 ) -> None:
-    """Write missing dates and XMP keywords in place (lossless: pixels are not touched)."""
-    args = ["exiftool", "-q", "-q", "-overwrite_original", "-P", "-api", "QuickTimeUTC"]
+    """Write missing dates and XMP keywords (lossless: pixels are not touched)."""
+    edits: list[str] = []
     if set_date is not None:
-        args += _date_args(category, set_date.strftime("%Y:%m:%d %H:%M:%S"))
+        edits += _date_args(category, set_date.strftime("%Y:%m:%d %H:%M:%S"))
     for keyword in keywords:  # remove-then-add never duplicates a keyword
-        args += [f"-XMP-dc:Subject-={keyword}", f"-XMP-dc:Subject+={keyword}"]
-    tools.run([*args, str(path)])
+        edits += [f"-XMP-dc:Subject-={keyword}", f"-XMP-dc:Subject+={keyword}"]
+    _rewrite(tools, path, edits)
 
 
 def revert_metadata(
     tools: Tools, path: Path, category: str, had_date: bool, keywords: Sequence[str]
 ) -> None:
     """Undo :func:`write_metadata`: clear the dates we added and remove our keywords."""
-    args = ["exiftool", "-q", "-q", "-overwrite_original", "-P"]
+    edits: list[str] = []
     if had_date:
-        args += _date_args(category, "")
+        edits += _date_args(category, "")
     for keyword in keywords:
-        args.append(f"-XMP-dc:Subject-={keyword}")
-    tools.run([*args, str(path)])
+        edits.append(f"-XMP-dc:Subject-={keyword}")
+    _rewrite(tools, path, edits)

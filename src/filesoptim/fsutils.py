@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import filecmp
 import hashlib
 import os
@@ -143,28 +144,141 @@ def same_content(first: Path, second: Path) -> bool:
     return filecmp.cmp(first, second, shallow=False)
 
 
-def install_file(new: Path, original: Path, target: Path | None = None) -> Path:
-    """Atomically put ``new`` in place of ``original``.
+class FileChangedError(OSError):
+    """The original changed while it was being processed: it is left untouched."""
 
-    The result keeps the permissions, timestamps and (when allowed) ownership of the original.
-    With ``target`` (a different name, e.g. a new extension) the original is removed afterwards.
+
+# errno values meaning "this filesystem cannot make hard links" (FAT, exFAT, some network fs)
+_NO_HARDLINK = {errno.EPERM, errno.EOPNOTSUPP, errno.ENOTSUP, errno.EMLINK, errno.EACCES}
+
+
+def fsync_file(path: Path) -> None:
+    """Force the content of ``path`` to the disk (survives a power cut)."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def fsync_dir(path: Path) -> None:
+    """Make renames/creations/deletions in the folder ``path`` durable."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:  # pragma: no cover - some filesystems cannot open folders
+        return
+    try:
+        with contextlib.suppress(OSError):  # not supported everywhere (e.g. some FUSE fs)
+            os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def durable_copy(source: Path, destination: Path) -> None:
+    """Copy (content, permissions, times) and flush it to the disk; removed if interrupted."""
+    try:
+        shutil.copy2(source, destination)
+        fsync_file(destination)
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
+
+
+def rename_no_clobber(source: Path, destination: Path) -> None:
+    """Rename on the same filesystem, never overwriting an existing ``destination``.
+
+    With hard links the destination is created atomically first and the source name removed
+    afterwards: an interruption can at worst leave both names, never zero.
+    """
+    try:
+        os.link(source, destination)
+    except FileExistsError:
+        raise
+    except OSError as exc:
+        if exc.errno not in _NO_HARDLINK:
+            raise
+        if destination.exists() or destination.is_symlink():
+            raise FileExistsError(f"{destination} already exists") from exc
+        source.rename(destination)
+        return
+    source.unlink()
+
+
+def safe_move(source: Path, destination: Path) -> None:
+    """Move a file without ever losing it and without overwriting anything.
+
+    Across filesystems the data is copied to a temporary name, flushed to the disk, given its
+    final name, and only then is the source deleted.
+    """
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"{destination} already exists")
+    try:
+        rename_no_clobber(source, destination)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        tmp = destination.with_name(f".{destination.name}{TEMP_MARK}")
+        durable_copy(source, tmp)
+        try:
+            rename_no_clobber(tmp, destination)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        fsync_dir(destination.parent)
+        source.unlink()
+    fsync_dir(destination.parent)
+    fsync_dir(source.parent)
+
+
+def install_file(
+    new: Path,
+    original: Path,
+    target: Path | None = None,
+    *,
+    expected: tuple[int, int] | None = None,
+) -> Path:
+    """Put ``new`` in place of ``original`` without any risk for the data.
+
+    The new content is written under a temporary name, flushed to the disk, then renamed over
+    the original in one atomic step: at every instant either the complete original or the
+    complete new file exists. ``expected`` (size, mtime) is checked just before replacing, so
+    a file modified meanwhile is never overwritten. The result keeps the permissions,
+    timestamps and (when allowed) ownership of the original. With ``target`` (a new name, e.g.
+    a new extension) the original is deleted only once the new file is safely in place.
     """
     dest = target or original
-    if dest != original and dest.exists():
+    if dest != original and (dest.exists() or dest.is_symlink()):
         raise FileExistsError(f"{dest} already exists")
     original_stat = original.stat()
     tmp = dest.with_name(f".{dest.name}{TEMP_MARK}")
+    copied = False
     try:
-        shutil.move(new, tmp)
+        try:
+            new.rename(tmp)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            shutil.copyfile(new, tmp)
+            copied = True
         shutil.copystat(original, tmp)
         with contextlib.suppress(OSError):
             os.chown(tmp, original_stat.st_uid, original_stat.st_gid)
-        tmp.replace(dest)
+        fsync_file(tmp)
+        if expected is not None and stat_key(original.stat()) != expected:
+            raise FileChangedError(f"{original.name} was modified meanwhile: left untouched")
+        if dest == original:
+            tmp.replace(dest)
+        else:
+            rename_no_clobber(tmp, dest)
+        fsync_dir(dest.parent)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+    if copied:
+        new.unlink(missing_ok=True)
     if dest != original:
         original.unlink()
+        fsync_dir(original.parent)
     return dest
 
 

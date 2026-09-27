@@ -199,3 +199,28 @@ def test_apply_undo_steps(tmp_path: Path) -> None:
     assert not copy.exists()
     json.dumps([s.entry for s in steps])  # entries stay serialisable
     assert not _stat_matches(tmp_path / "does-not-exist", 1, 1)
+
+
+def test_copy_collision_keeps_everything(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from filesoptim.sorting import executor as executor_mod
+
+    src = touch(tmp_path / "a.jpg", b"source")
+    dst = tmp_path / "out" / "a.jpg"
+
+    def appeared(source: Path, destination: Path) -> None:
+        destination.write_bytes(b"someone else's file")  # created by another program meanwhile
+        raise FileExistsError(destination)
+
+    monkeypatch.setattr(executor_mod, "rename_no_clobber", appeared)
+    plan = SortPlan(SortOptions(tmp_path, tmp_path / "out"),
+                    [SortOp(src, dst, "copy", "image")])
+    result = SortExecutor(FakeTools(), Out()).execute(plan)
+    assert result.failures and src.read_bytes() == b"source"
+    assert dst.read_bytes() == b"someone else's file"
+    assert [p.name for p in dst.parent.iterdir()] == ["a.jpg"]  # no temporary copy left
+
+
+def test_undo_of_a_move_that_never_happened(tmp_path: Path) -> None:
+    src = touch(tmp_path / "a.jpg")
+    steps = plan_undo([{"type": "move", "src": str(src), "dst": str(tmp_path / "x" / "a.jpg")}])
+    assert steps[0].blocked == "was not moved (interrupted before): nothing to undo"

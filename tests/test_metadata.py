@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any
 import pytest
 from PIL import Image
 
+from filesoptim.fsutils import TEMP_MARK, FileChangedError
 from filesoptim.sorting import metadata
 from filesoptim.sorting.metadata import (
     MediaInfo,
@@ -23,6 +25,7 @@ from filesoptim.sorting.metadata import (
     revert_metadata,
     write_metadata,
 )
+from filesoptim.tools import ToolError
 from tests.conftest import FakeTools, age, make_image
 
 
@@ -253,21 +256,59 @@ def test_complete_date_edge_cases(tmp_path: Path) -> None:
 
 # -- writing ------------------------------------------------------------------------------
 def test_write_and_revert_arguments(tmp_path: Path) -> None:
+    tmp_path = tmp_path / "work"
+    tmp_path.mkdir()
     tools = FakeTools(["exiftool"])
     photo, clip = tmp_path / "a.jpg", tmp_path / "b.mp4"
+    photo.write_bytes(b"photo")
+    clip.write_bytes(b"clip")
+    os.utime(photo, (1000, 1000))
     write_metadata(tools, photo, "image", datetime(2019, 6, 12, 10, 15, 30), ["Trip"])
+    out = str(tmp_path / f".a{TEMP_MARK}.jpg")
     assert tools.calls[-1] == [
-        "exiftool", "-q", "-q", "-overwrite_original", "-P", "-api", "QuickTimeUTC",
+        "exiftool", "-q", "-q", "-api", "QuickTimeUTC",
         "-EXIF:DateTimeOriginal=2019:06:12 10:15:30", "-EXIF:CreateDate=2019:06:12 10:15:30",
-        "-XMP-dc:Subject-=Trip", "-XMP-dc:Subject+=Trip", str(photo),
+        "-XMP-dc:Subject-=Trip", "-XMP-dc:Subject+=Trip", "-o", out, str(photo),
     ]
+    assert photo.stat().st_mtime == 1000  # timestamps kept
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["a.jpg", "b.mp4"]  # no temp left
     write_metadata(tools, clip, "video", datetime(2019, 6, 12), [])
     assert "-QuickTime:MediaCreateDate=2019:06:12 00:00:00" in tools.calls[-1]
     write_metadata(tools, photo, "image", None, ["Only"])
-    assert tools.calls[-1][7:] == ["-XMP-dc:Subject-=Only", "-XMP-dc:Subject+=Only", str(photo)]
+    assert tools.calls[-1][5:7] == ["-XMP-dc:Subject-=Only", "-XMP-dc:Subject+=Only"]
     revert_metadata(tools, clip, "video", True, ["Trip"])
     assert "-QuickTime:CreateDate=" in tools.calls[-1]
     assert "-XMP-dc:Subject-=Trip" in tools.calls[-1]
     revert_metadata(tools, photo, "image", False, [])
-    assert tools.calls[-1] == ["exiftool", "-q", "-q", "-overwrite_original", "-P", str(photo)]
+    assert tools.calls[-1][5:] == ["-o", out, str(photo)]
+
+
+def test_metadata_writes_never_damage_the_original(tmp_path: Path) -> None:
+    tmp_path = tmp_path / "work"
+    tmp_path.mkdir()
+    photo = tmp_path / "a.jpg"
+    photo.write_bytes(b"precious")
+    # exiftool fails: the original is untouched and no temporary file remains
+    failing = FakeTools(["exiftool"], exiftool=lambda argv: (1, "", "Error: bad file"))
+    with pytest.raises(ToolError):
+        write_metadata(failing, photo, "image", None, ["x"])
+    # exiftool "succeeds" without writing anything
+    silent = FakeTools(["exiftool"], exiftool=lambda argv: (0, "", ""))
+    with pytest.raises(ToolError, match="did not write"):
+        write_metadata(silent, photo, "image", None, ["x"])
+
+    # the photo is edited by someone else while exiftool works: their edit wins
+    def concurrent_edit(argv: list[str]) -> tuple[int, str, str]:
+        Path(argv[argv.index("-o") + 1]).write_bytes(b"tagged")
+        photo.write_bytes(b"edited by the user meanwhile")
+        return 0, "", ""
+
+    with pytest.raises(FileChangedError):
+        write_metadata(FakeTools(["exiftool"], exiftool=concurrent_edit), photo, "image", None,
+                       ["x"])
+    assert photo.read_bytes() == b"edited by the user meanwhile"
+    assert [p.name for p in tmp_path.iterdir()] == ["a.jpg"]
+    (tmp_path / f".a{TEMP_MARK}.jpg").write_bytes(b"leftover")  # from a killed run
+    write_metadata(FakeTools(["exiftool"]), photo, "image", None, ["x"])
+    assert [p.name for p in tmp_path.iterdir()] == ["a.jpg"]
     assert can_write_metadata(Path("x.HEIC")) and not can_write_metadata(Path("x.avi"))

@@ -18,6 +18,7 @@ from filesoptim.fsutils import (
     TEMP_MARK,
     WalkOptions,
     display_path,
+    durable_copy,
     free_space,
     install_file,
     iter_files,
@@ -304,7 +305,7 @@ class Engine:
             backup_root = Path(self.config.optimize.backup_dir).expanduser()
             destination = unique_path(backup_root / path.absolute().relative_to("/"))
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, destination)
+            durable_copy(path, destination)  # on the disk before the original is replaced
 
     def apply_one(self, estimate: Estimate, workdir: Path) -> Outcome:
         optimizer = self._by_name[estimate.kind]
@@ -328,7 +329,8 @@ class Engine:
                 self._remember(est, optimizer)
                 return self._skipped(est)
             self._keep_original(optimizer, path)
-            final = install_file(est.staged, path, est.target)
+            # Checked again right before replacing: an edit made meanwhile is never lost.
+            final = install_file(est.staged, path, est.target, expected=est.stat_key)
         except (OSError, ToolError) as exc:
             est.discard()
             return Outcome(path, est.kind, "failed", est.original_size, est.original_size,

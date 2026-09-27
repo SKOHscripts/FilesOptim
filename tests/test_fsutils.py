@@ -271,3 +271,140 @@ def test_run_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(Path, "lstat", flaky)
     assert tree_bytes(dead) < 10_000  # vanished files are ignored
+
+
+# -- data safety primitives ------------------------------------------------------------------
+def _fail_link_with(monkeypatch: pytest.MonkeyPatch, code: int, *, times: int = 99) -> None:
+    import errno as _errno  # noqa: F401
+
+    real = os.link
+    calls = {"n": 0}
+
+    def link(src: Any, dst: Any, **kwargs: Any) -> None:
+        calls["n"] += 1
+        if calls["n"] <= times:
+            raise OSError(code, os.strerror(code))
+        real(src, dst)
+
+    monkeypatch.setattr(fsutils.os, "link", link)
+
+
+def test_rename_no_clobber(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import errno
+
+    from filesoptim.fsutils import rename_no_clobber
+
+    a = touch(tmp_path / "a", b"A")
+    rename_no_clobber(a, tmp_path / "b")
+    assert (tmp_path / "b").read_bytes() == b"A" and not a.exists()
+    touch(tmp_path / "c", b"C")
+    with pytest.raises(FileExistsError):
+        rename_no_clobber(tmp_path / "b", tmp_path / "c")
+    assert (tmp_path / "c").read_bytes() == b"C" and (tmp_path / "b").exists()
+    _fail_link_with(monkeypatch, errno.EPERM)  # FAT/exFAT: no hard links
+    rename_no_clobber(tmp_path / "b", tmp_path / "d")
+    assert (tmp_path / "d").read_bytes() == b"A"
+    with pytest.raises(FileExistsError):
+        rename_no_clobber(tmp_path / "d", tmp_path / "c")
+    assert (tmp_path / "c").read_bytes() == b"C" and (tmp_path / "d").exists()
+    monkeypatch.undo()
+    _fail_link_with(monkeypatch, errno.EIO)
+    with pytest.raises(OSError, match="Input/output"):
+        rename_no_clobber(tmp_path / "d", tmp_path / "e")
+    assert (tmp_path / "d").exists()
+
+
+def test_safe_move(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import errno
+
+    from filesoptim.fsutils import safe_move
+
+    src = touch(tmp_path / "src" / "a.jpg", b"photo")
+    (tmp_path / "dst").mkdir()
+    touch(tmp_path / "dst" / "taken.jpg", b"other")
+    with pytest.raises(FileExistsError):
+        safe_move(src, tmp_path / "dst" / "taken.jpg")
+    safe_move(src, tmp_path / "dst" / "a.jpg")
+    assert (tmp_path / "dst" / "a.jpg").read_bytes() == b"photo" and not src.exists()
+    # another disk: copied, flushed, renamed, and only then the source is removed
+    _fail_link_with(monkeypatch, errno.EXDEV, times=1)
+    safe_move(tmp_path / "dst" / "a.jpg", tmp_path / "src" / "b.jpg")
+    assert (tmp_path / "src" / "b.jpg").read_bytes() == b"photo"
+    assert not (tmp_path / "dst" / "a.jpg").exists()
+    assert not list(tmp_path.rglob(f"*{TEMP_MARK}*"))
+    monkeypatch.undo()
+    # interrupted while giving the copy its final name: the source is still there
+    _fail_link_with(monkeypatch, errno.EXDEV, times=1)
+    real_link = fsutils.rename_no_clobber
+    calls = {"n": 0}
+
+    def flaky(source: Path, destination: Path) -> None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise KeyboardInterrupt
+        real_link(source, destination)
+
+    monkeypatch.setattr(fsutils, "rename_no_clobber", flaky)
+    with pytest.raises(KeyboardInterrupt):
+        safe_move(tmp_path / "src" / "b.jpg", tmp_path / "dst" / "c.jpg")
+    assert (tmp_path / "src" / "b.jpg").read_bytes() == b"photo"
+    assert not (tmp_path / "dst" / "c.jpg").exists()
+    assert not list(tmp_path.rglob(f"*{TEMP_MARK}*"))
+    monkeypatch.undo()
+    _fail_link_with(monkeypatch, errno.EIO)
+    with pytest.raises(OSError):
+        safe_move(tmp_path / "src" / "b.jpg", tmp_path / "dst" / "d.jpg")
+    assert (tmp_path / "src" / "b.jpg").exists()
+
+
+def test_durable_copy_interrupted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from filesoptim.fsutils import durable_copy, fsync_dir, fsync_file
+
+    src = touch(tmp_path / "a", b"data")
+    durable_copy(src, tmp_path / "b")
+    assert (tmp_path / "b").read_bytes() == b"data"
+    fsync_file(tmp_path / "b")
+    fsync_dir(tmp_path)
+
+    def interrupted(fd: int) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(fsutils.os, "fsync", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        durable_copy(src, tmp_path / "c")
+    assert not (tmp_path / "c").exists() and src.read_bytes() == b"data"
+
+
+def test_install_file_guards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import errno
+
+    from filesoptim.fsutils import FileChangedError
+
+    original = touch(tmp_path / "photo.jpg", b"original")
+    expected = stat_key(original.stat())
+    new = touch(tmp_path / "work" / "new", b"smaller")
+    original.write_bytes(b"edited meanwhile")  # the user changed it during the processing
+    with pytest.raises(FileChangedError):
+        install_file(new, original, expected=expected)
+    assert original.read_bytes() == b"edited meanwhile"
+    assert not list(tmp_path.glob(f".*{TEMP_MARK}"))
+    # staged copy on another disk: copied next to the original, then swapped
+    new = touch(tmp_path / "work" / "new2", b"smaller")
+    real_rename = Path.rename
+
+    def cross_device(self: Path, target: Any) -> Any:
+        if self == new:
+            raise OSError(errno.EXDEV, "cross-device")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", cross_device)
+    install_file(new, original, expected=stat_key(original.stat()))
+    assert original.read_bytes() == b"smaller" and not new.exists()
+
+    def broken(self: Path, target: Any) -> Any:
+        raise OSError(errno.EIO, "I/O error")
+
+    monkeypatch.setattr(Path, "rename", broken)
+    with pytest.raises(OSError, match="I/O"):
+        install_file(touch(tmp_path / "work" / "new3", b"x"), original)
+    assert original.read_bytes() == b"smaller"

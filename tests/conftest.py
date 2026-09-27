@@ -63,6 +63,15 @@ class FakePopen:
         self.killed = True
 
 
+def fake_exiftool_output(argv: list[str]) -> Result:
+    """``exiftool ... -o OUT IN``: writes a (metadata-edited) copy of IN to OUT."""
+    output = Path(argv[argv.index("-o") + 1])
+    if output.exists():
+        return 1, "", f"Error: '{output}' already exists"
+    output.write_bytes(Path(argv[-1]).read_bytes())
+    return 0, "", ""
+
+
 class FakeTools(Tools):
     """Drop-in replacement for :class:`Tools` driven by Python handlers."""
 
@@ -83,6 +92,8 @@ class FakeTools(Tools):
         if argv[0] not in self.available:
             raise ToolError(f"'{argv[0]}' is not installed")
         handler = self.handlers.get(argv[0])
+        if handler is None and argv[0] == "exiftool" and "-o" in argv:
+            handler = fake_exiftool_output
         code, out, err = handler(argv) if handler else (0, "", "")
         if check and code != 0:
             raise ToolError(f"{argv[0]} failed: {err}")
