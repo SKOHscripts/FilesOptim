@@ -1,0 +1,50 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests
+      - run: mypy
+
+  unit:
+    # Fake external tools: 100 % line + branch coverage without ffmpeg & co.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - run: pytest -m "not integration" --cov=filesoptim --cov-branch --cov-report=term-missing
+
+  integration:
+    # The real programs: jpegoptim, optipng, gifsicle, qpdf, ffmpeg, exiftool.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends jpegoptim optipng gifsicle qpdf \
+            ghostscript ffmpeg libimage-exiftool-perl libjpeg-turbo-progs
+      - run: pip install -e ".[dev]"
+      - run: pytest --cov=filesoptim --cov-branch --cov-report=term-missing
